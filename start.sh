@@ -79,7 +79,7 @@ genereer_java_cmd() {
     # Optimalisaties voor high-performance server met 10GB RAM
     JAVA_CMD=(
         java
-        -Xms"$RAM_TOEWIJZING"          # Start met toegeweze begin RAM
+        -Xms"$RAM_TOEWIJZING"          # Start met toegewezen begin RAM
         -Xmx"$RAM_TOEWIJZING"          # Maximum RAM
         
         # G1GC optimalisaties voor stabiele prestaties
