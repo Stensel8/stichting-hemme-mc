@@ -16,8 +16,8 @@ dnf install clear wget tmux java-21-openjdk -y
 # --------------------- CONFIGURATIE ---------------------------------
 SERVER_NAAM="stichting-hemme-mc"
 DATA_DIR="./server-data"
-JAR_URL="https://api.papermc.io/v2/projects/paper/versions/1.21.5/builds/113/downloads/paper-1.21.5-113.jar"
-JAR_HASH="37a458d387c8647a671d9199bdd5e6a70c793944b495e958bda235244f2a0996"
+JAR_URL="https://fill-data.papermc.io/v1/objects/bfca155b4a6b45644bfc1766f4e02a83c736e45fcc060e8788c71d6e7b3d56f6/paper-1.21.6-46.jar"
+JAR_HASH="bfca155b4a6b45644bfc1766f4e02a83c736e45fcc060e8788c71d6e7b3d56f6"
 JAR_NAAM="hemme-mc.jar"
 RAM_TOEWIJZING="8G"
 TMUX_SESSIE="hemme-mc"
@@ -79,7 +79,7 @@ genereer_java_cmd() {
     # Optimalisaties voor high-performance server met 10GB RAM
     JAVA_CMD=(
         java
-        -Xms"$RAM_TOEWIJZING"          # Start met volledige RAM
+        -Xms"$RAM_TOEWIJZING"          # Start met toegeweze begin RAM
         -Xmx"$RAM_TOEWIJZING"          # Maximum RAM
         
         # G1GC optimalisaties voor stabiele prestaties
@@ -155,7 +155,7 @@ start_server() {
 clear
 echo "╔════════════════════════════════════════════╗"
 echo "║   Stichting Hemme Minecraft Server 2025    ║"
-echo "║         Powered by PaperMC 1.21.5          ║"
+echo "║         Powered by PaperMC 1.21.6          ║"
 echo "╚════════════════════════════════════════════╝"
 echo ""
 
@@ -196,7 +196,7 @@ echo ""
 print_info "Server configuratie:"
 echo "  • RAM toewijzing: $RAM_TOEWIJZING"
 echo "  • CPU cores: 4"
-echo "  • Server type: PaperMC 1.21.5"
+echo "  • Server type: PaperMC 1.21.6"
 echo "  • Data directory: $DATA_DIR"
 echo ""
 
