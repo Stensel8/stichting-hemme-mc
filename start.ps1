@@ -19,6 +19,8 @@ param (
     [string]$DataDir = ".\server-data"
 )
 
+Clear-Host
+
 function Get-MinecraftServer {
     Write-Host "[INFO] Downloaden van PaperMC..." -ForegroundColor Cyan
 
@@ -31,7 +33,7 @@ function Get-MinecraftServer {
     if (Test-Path -Path $JarPath) {
         Write-Host "[INFO] Serverbestand bestaat al." -ForegroundColor Yellow
     } else {
-        Invoke-WebRequest -Uri $JarUrl -OutFile $JarPath
+        Start-BitsTransfer -Source $JarUrl -Destination $JarPath
     }
 
     Write-Host "[INFO] Verifiëren van checksum..." -ForegroundColor Cyan
@@ -53,10 +55,8 @@ function Get-MinecraftServer {
     }
 }
 
-function Run-MinecraftServer {
+function Start-MinecraftServer {
     Write-Host "[INFO] Starten van Minecraft server..." -ForegroundColor Cyan
-
-    $JarPath = Join-Path $DataDir $JarName
 
     Push-Location -Path $DataDir
 
@@ -68,13 +68,20 @@ function Run-MinecraftServer {
         "nogui"
     )
 
-    Start-Process -FilePath "java" -ArgumentList $JavaArgs -NoNewWindow
 
-    Write-Host "[OK] Server gestart (loopt in deze Powershell sessie)." -ForegroundColor Green
-
-    Pop-Location
+    try {
+        Start-Process -FilePath "java" -ArgumentList $JavaArgs -NoNewWindow -Wait
+        if ($Error -eq 0) {
+            Write-Host "[OK] Server gestart (loopt in deze Powershell sessie)." -ForegroundColor Green
+        }
+    }
+    catch {
+        Write-Host "[ERROR] Server niet gestart! (Java probleem)." -ForegroundColor Red
+    }
+    finally {
+        Pop-Location
+    }
 }
-
 # --- Script uitvoeren ---
 Get-MinecraftServer
-Run-MinecraftServer
+Start-MinecraftServer
