@@ -71,8 +71,10 @@ function Start-MinecraftServer {
 
     try {
         Start-Process -FilePath "java" -ArgumentList $JavaArgs -NoNewWindow -Wait
-        if ($Error -eq 0) {
+        if ($LASTEXITCODE -eq 0) {
             Write-Host "[OK] Server gestart (loopt in deze Powershell sessie)." -ForegroundColor Green
+        } else {
+            Write-Host "[ERROR] Server niet gestart! Exit code: $LASTEXITCODE" -ForegroundColor Red
         }
     }
     catch {
