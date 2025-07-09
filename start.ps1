@@ -15,7 +15,7 @@ param (
     [string]$JarUrl = "https://fill-data.papermc.io/v1/objects/9adbd99ce7b42c9f0cb205686d83f0208a93fa6d215bb28196e12d0aaf49c2d8/paper-1.21.7-17.jar",
     [string]$JarHash = "9adbd99ce7b42c9f0cb205686d83f0208a93fa6d215bb28196e12d0aaf49c2d8",
     [string]$JarName = "minecraft-server.jar",
-    [string]$Ram = "4G",
+    [string]$Ram = "8G",
     [string]$DataDir = ".\server-data"
 )
 
