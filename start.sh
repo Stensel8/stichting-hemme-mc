@@ -40,8 +40,17 @@ print_fout() {
 # Download en verifieer het JAR bestand
 download_paper() {
     if [[ -f "$JAR_NAAM" ]]; then
-        print_info "$JAR_NAAM is al gedownload."
-        return
+        print_info "$JAR_NAAM is al gedownload. Checksum verifiëren..."
+        local checksum
+        checksum=$(sha256sum "$JAR_NAAM" | awk '{print $1}')
+        
+        if [[ "$checksum" == "$JAR_HASH" ]]; then
+            print_succes "Checksum is geldig. Geen download nodig."
+            return
+        else
+            print_fout "Checksum komt niet overeen! Bestand opnieuw downloaden..."
+            rm -f "$JAR_NAAM"
+        fi
     fi
     
     print_info "PaperMC downloaden..."
