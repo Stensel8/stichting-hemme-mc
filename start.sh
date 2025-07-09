@@ -155,7 +155,7 @@ start_server() {
 clear
 echo "╔════════════════════════════════════════════╗"
 echo "║   Stichting Hemme Minecraft Server 2025    ║"
-echo "║         Powered by PaperMC 1.21.6          ║"
+echo "║         Powered by PaperMC 1.21.7          ║"
 echo "╚════════════════════════════════════════════╝"
 echo ""
 
@@ -196,7 +196,7 @@ echo ""
 print_info "Server configuratie:"
 echo "  • RAM toewijzing: $RAM_TOEWIJZING"
 echo "  • CPU cores: 4"
-echo "  • Server type: PaperMC 1.21.6"
+echo "  • Server type: PaperMC 1.21.7"
 echo "  • Data directory: $DATA_DIR"
 echo ""
 
