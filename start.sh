@@ -10,7 +10,7 @@ set -euo pipefail
 # =====================================================================
 
 # --------------------- PAKETTEN INSTALLEREN --------------------------
-dnf install clear wget tmux java-21-openjdk -y
+dnf install wget tmux java-21-openjdk -y
 
 
 # --------------------- CONFIGURATIE ---------------------------------
