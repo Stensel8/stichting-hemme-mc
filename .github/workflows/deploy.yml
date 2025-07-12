@@ -10,24 +10,46 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-      - name: Setup SSH key
+      - name: Setup SSH agent (consistent met debug)
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.GAMESERVER_SSH_KEY }}
+
+      - name: Add server to known hosts
         run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.GAMESERVER_SSH_KEY }}" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H ${{ secrets.GAMESERVER_HOST }} >> ~/.ssh/known_hosts
 
-      - name: Sync via rsync
+      - name: Test SSH connection
+        run: |
+          ssh -o ConnectTimeout=10 ${{ secrets.GAMESERVER_USER }}@${{ secrets.GAMESERVER_HOST }} 'echo "SSH connection successful"'
+
+      - name: Create target directory
+        run: |
+          ssh ${{ secrets.GAMESERVER_USER }}@${{ secrets.GAMESERVER_HOST }} 'mkdir -p /srv/minecraft'
+
+      - name: Sync files via rsync
         run: |
           rsync -avz --delete \
-            -e "ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=accept-new" \
-            ./ ${{ secrets.GAMESERVER_USER }}@${{ secrets.GAMESERVER_HOST }}:/srv/minecraft
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='server-data' \
+            --exclude='*.log' \
+            ./ ${{ secrets.GAMESERVER_USER }}@${{ secrets.GAMESERVER_HOST }}:/srv/minecraft/
 
-      - name: Restart Minecraft
+      - name: Set permissions on target
         run: |
-          ssh \
-            -i ~/.ssh/id_ed25519 \
-            -o StrictHostKeyChecking=accept-new \
-            ${{ secrets.GAMESERVER_USER }}@${{ secrets.GAMESERVER_HOST }} \
-            sudo systemctl restart minecraft
+          ssh ${{ secrets.GAMESERVER_USER }}@${{ secrets.GAMESERVER_HOST }} 'chmod +x /srv/minecraft/start.sh'
+
+      - name: Check if minecraft service exists
+        run: |
+          ssh ${{ secrets.GAMESERVER_USER }}@${{ secrets.GAMESERVER_HOST }} 'systemctl is-enabled minecraft || echo "Service does not exist"'
+
+      - name: Restart Minecraft service
+        run: |
+          ssh ${{ secrets.GAMESERVER_USER }}@${{ secrets.GAMESERVER_HOST }} 'sudo systemctl restart minecraft'
+
+      - name: Check service status
+        run: |
+          ssh ${{ secrets.GAMESERVER_USER }}@${{ secrets.GAMESERVER_HOST }} 'sudo systemctl status minecraft --no-pager'

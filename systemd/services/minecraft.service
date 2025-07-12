@@ -1,0 +1,19 @@
+[Unit]
+Description=Stichting Hemme Minecraft Server
+After=network.target
+
+[Service]
+Type=forking
+User=minecraft
+Group=minecraft
+WorkingDirectory=/srv/minecraft
+ExecStart=/usr/bin/tmux new-session -d -s minecraft '/srv/minecraft/start.sh'
+ExecStop=/usr/bin/tmux send-keys -t minecraft 'stop' Enter
+ExecStop=/bin/sleep 10
+ExecStop=/usr/bin/tmux kill-session -t minecraft
+RemainAfterExit=yes
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
