@@ -1,55 +1,55 @@
+# ================================
+# deploy.yml – minecraft deploy + service beheer
+# ================================
 name: Deploy Minecraft Server
 
 on:
   push:
     branches: [ Gameserver ]
-  workflow_dispatch:
+  workflow_dispatch: {}
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup SSH agent (consistent met debug)
+      - name: Start SSH agent
         uses: webfactory/ssh-agent@v0.9.0
         with:
           ssh-private-key: ${{ secrets.GAMESERVER_SSH_KEY }}
 
-      - name: Add server to known hosts
+      - name: Add host key
         run: |
-          ssh-keyscan -H ${{ secrets.GAMESERVER_HOST }} >> ~/.ssh/known_hosts
+          ssh-keyscan -t ed25519 -H ${{ secrets.GAMESERVER_HOST }} >> ~/.ssh/known_hosts
 
-      - name: Test SSH connection
+      # 1) Zorg weer voor deps (tmux + Java) voor de deploy
+      - name: Ensure deps present
         run: |
-          ssh -o ConnectTimeout=10 ${{ secrets.GAMESERVER_USER }}@${{ secrets.GAMESERVER_HOST }} 'echo "SSH connection successful"'
+          ssh ${{ secrets.GAMESERVER_USER }}@${{ secrets.GAMESERVER_HOST }} '/bin/bash -s' <<'EOS'
+          set -e
+          if ! command -v tmux >/dev/null; then sudo apt-get update -qq && sudo apt-get install -y tmux; fi
+          if ! java -version 2>&1 | grep -q "17\|24"; then sudo apt-get update -qq && sudo apt-get install -y openjdk-17-jdk; fi
+          EOS
 
-      - name: Create target directory
+      # 2) Kopieer build‑files naar server
+      - name: Sync server files
         run: |
-          ssh ${{ secrets.GAMESERVER_USER }}@${{ secrets.GAMESERVER_HOST }} 'mkdir -p /srv/minecraft'
+          rsync -avz --delete ./server/ ${{ secrets.GAMESERVER_USER }}@${{ secrets.GAMESERVER_HOST }}:/srv/minecraft/
 
-      - name: Sync files via rsync
+      # 3) Start of herstart via tmux (valt terug op systemctl service als die bestaat)
+      - name: Restart via tmux
         run: |
-          rsync -avz --delete \
-            --exclude='.git' \
-            --exclude='.github' \
-            --exclude='server-data' \
-            --exclude='*.log' \
-            ./ ${{ secrets.GAMESERVER_USER }}@${{ secrets.GAMESERVER_HOST }}:/srv/minecraft/
+          ssh ${{ secrets.GAMESERVER_USER }}@${{ secrets.GAMESERVER_HOST }} <<'EOS'
+          tmux has-session -t mc 2>/dev/null && tmux kill-session -t mc || true
+          tmux new-session -d -s mc 'cd /srv/minecraft && bash start.sh'
+          EOS
 
-      - name: Set permissions on target
+      # 4) systemd service
+      - name: Reload systemd service (if exists)
         run: |
-          ssh ${{ secrets.GAMESERVER_USER }}@${{ secrets.GAMESERVER_HOST }} 'chmod +x /srv/minecraft/start.sh'
-
-      - name: Check if minecraft service exists
-        run: |
-          ssh ${{ secrets.GAMESERVER_USER }}@${{ secrets.GAMESERVER_HOST }} 'systemctl is-enabled minecraft || echo "Service does not exist"'
-
-      - name: Restart Minecraft service
-        run: |
-          ssh ${{ secrets.GAMESERVER_USER }}@${{ secrets.GAMESERVER_HOST }} 'sudo systemctl restart minecraft'
-
-      - name: Check service status
-        run: |
-          ssh ${{ secrets.GAMESERVER_USER }}@${{ secrets.GAMESERVER_HOST }} 'sudo systemctl status minecraft --no-pager'
+          ssh -o StrictHostKeyChecking=yes ${{ secrets.GAMESERVER_USER }}@${{ secrets.GAMESERVER_HOST }} \
+            'sudo systemctl is-enabled minecraft && sudo systemctl restart minecraft || echo "systemd service ontbreekt, tmux gestart"'

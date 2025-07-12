@@ -1,46 +1,63 @@
+# ================================
+# debug.yml – snelle SSH‑debug met extra checks
+# ================================
 name: Debug SSH Connectivity
 on:
-  workflow_dispatch:
+  workflow_dispatch: {}
 
 jobs:
   debug:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup SSH agent
+      # 1) SSH‑agent starten met je secret
+      - name: Start SSH agent
         uses: webfactory/ssh-agent@v0.9.0
         with:
           ssh-private-key: ${{ secrets.GAMESERVER_SSH_KEY }}
 
-      - name: Show loaded SSH keys
-        run: ssh-add -l
-
-      - name: List ~/.ssh directory
-        run: ls -la ~/.ssh || echo "~/.ssh directory does not exist"
-
-      - name: Test basic connectivity
+      # 2) Host‑key in known_hosts zetten
+      - name: Add host key
         run: |
-          echo "Testing connectivity to ${{ secrets.GAMESERVER_HOST }}"
-          ping -c 3 ${{ secrets.GAMESERVER_HOST }} || echo "Ping failed"
+          ssh-keyscan -t ed25519 -H ${{ secrets.GAMESERVER_HOST }} >> ~/.ssh/known_hosts
 
-      - name: SSH key scan
+      # 3) Basistest – login & omgevingsinfo
+      - name: Verify login and basic info
         run: |
-          ssh-keyscan -H ${{ secrets.GAMESERVER_HOST }} >> ~/.ssh/known_hosts
-          echo "Added host to known_hosts"
+          ssh -o BatchMode=yes ${{ secrets.GAMESERVER_USER }}@${{ secrets.GAMESERVER_HOST }} <<'EOS'
+          set -e
+          GREEN="\033[1;32m"; BLUE="\033[1;34m"; YELLOW="\033[1;33m"; NC="\033[0m"
+          echo -e "${GREEN}CONNECTED as $(whoami) on $(hostname -f)${NC}"
+          echo -e "${BLUE}Current dir:${NC} $(pwd)"
+          echo -e "${BLUE}Uptime:$(uptime -p)${NC}"
+          EOS
 
-      - name: Raw SSH connect debug
+      # 4) Zorg dat tmux en Temurin 24 geïnstalleerd zijn
+      - name: Ensure tmux & Java 24 present
         run: |
-          ssh -vvv -o ConnectTimeout=10 -o BatchMode=yes \
-              ${{ secrets.GAMESERVER_USER }}@${{ secrets.GAMESERVER_HOST }} \
-              'echo "SSH connection successful"; whoami; pwd; ls -la'
+          ssh ${{ secrets.GAMESERVER_USER }}@${{ secrets.GAMESERVER_HOST }} <<'EOS'
+          set -e
+          GREEN="\033[1;32m"; YELLOW="\033[1;33m"; RED="\033[1;31m"; NC="\033[0m"
 
-      - name: Test target directory
-        run: |
-          ssh ${{ secrets.GAMESERVER_USER }}@${{ secrets.GAMESERVER_HOST }} \
-              'ls -la /srv/ && mkdir -p /srv/minecraft && ls -la /srv/minecraft'
+          # tmux
+          if ! command -v tmux >/dev/null; then
+            echo -e "${YELLOW}[INSTALL] tmux${NC}" && sudo apt-get update -qq && sudo apt-get install -y tmux
+          else
+            echo -e "${GREEN}[OK] tmux aanwezig: $(tmux -V)${NC}"
+          fi
 
-      - name: Test sudo permissions
-        run: |
-          ssh ${{ secrets.GAMESERVER_USER }}@${{ secrets.GAMESERVER_HOST }} \
-              'sudo -n systemctl --version || echo "No passwordless sudo for systemctl"'
+          # Java 24 (Eclipse Temurin)
+          if ! java -version 2>&1 | grep -q "17\|24"; then  # fallback op 17 is prima
+            echo -e "${YELLOW}[INSTALL] Temurin 24 JDK${NC}"
+            sudo apt-get update -qq
+            sudo apt-get install -y software-properties-common
+            sudo add-apt-repository -y ppa:openjdk-r/ppa || true
+            sudo apt-get install -y temurin-24-jdk || sudo apt-get install -y adoptopenjdk-24-hotspot || sudo apt-get install -y openjdk-17-jdk
+          else
+            echo -e "${GREEN}[OK] Java aanwezig: $(java -version 2>&1 | head -n1)${NC}"
+          fi
+          EOS
