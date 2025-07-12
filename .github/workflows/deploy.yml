@@ -19,27 +19,39 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Start SSH agent
+      - name: Start SSH‑agent
         uses: webfactory/ssh-agent@v0.9.0
         with:
           ssh-private-key: ${{ secrets.GAMESERVER_SSH_KEY }}
 
-      - name: Add host key
+      - name: Voeg host‑key toe
         run: ssh-keyscan -t ed25519 -H "$HOST" >> ~/.ssh/known_hosts
 
-      - name: Zorg dat tmux en Java aanwezig zijn
+      - name: Controleer tmux en Java
         run: |
           ssh "$USER@$HOST" <<'EOS'
           set -e
-          install() { sudo -n true 2>/dev/null && sudo apt-get update -qq && sudo apt-get install -y "$@"; }
-          command -v tmux >/dev/null || install tmux || echo "tmux niet geïnstalleerd (geen sudo)"
-          java -version 2>&1 | grep -q "\(24\|17\)" || install openjdk-24-jdk || install openjdk-17-jdk || echo "Java niet geïnstalleerd (geen sudo)"
+          MISSING=0
+          if ! command -v tmux >/dev/null; then
+            echo "tmux ontbreekt. Installeer eerst handmatig (of run ./start.sh)."
+            MISSING=1
+          fi
+          if ! java -version 2>&1 | grep -q "\(24\|17\)"; then
+            echo "Java 17/24 ontbreekt. Installeer eerst handmatig (of run ./start.sh)."
+            MISSING=1
+          fi
+          [ "$MISSING" -eq 0 ] || exit 1
           EOS
 
       - name: Bestanden kopiëren
-        run: rsync -avz --delete ./server/ "$USER@$HOST:/srv/minecraft/"
+        run: |
+          if [ ! -d ./server ]; then
+            echo "Map server/ ontbreekt in repo. Zet je serverbestanden daarin en commit opnieuw."
+            exit 1
+          fi
+          rsync -avz --delete ./server/ "$USER@$HOST:/srv/minecraft/"
 
-      - name: Server herstarten via tmux
+      - name: Herstart via tmux
         run: |
           ssh "$USER@$HOST" <<'EOS'
           set -e
