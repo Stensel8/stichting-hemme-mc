@@ -18,18 +18,16 @@ jobs:
           echo "${{ secrets.GAMESERVER_SSH_KEY }}" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
 
-      - name: Accept host key
-        run: |
-          ssh-keyscan -H ${{ secrets.GAMESERVER_HOST }} >> ~/.ssh/known_hosts
-
       - name: Sync via rsync
         run: |
           rsync -avz --delete \
-            -e "ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=no" \
+            -e "ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=accept-new" \
             ./ ${{ secrets.GAMESERVER_USER }}@${{ secrets.GAMESERVER_HOST }}:/srv/minecraft
 
       - name: Restart Minecraft
         run: |
-          ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=no \
+          ssh \
+            -i ~/.ssh/id_ed25519 \
+            -o StrictHostKeyChecking=accept-new \
             ${{ secrets.GAMESERVER_USER }}@${{ secrets.GAMESERVER_HOST }} \
             sudo systemctl restart minecraft
