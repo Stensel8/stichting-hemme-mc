@@ -1,0 +1,24 @@
+name: Debug SSH Connectivity
+on:
+  workflow_dispatch:
+
+jobs:
+  debug:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup SSH key in agent
+        uses: webfactory/ssh-agent@v0.5.4
+        with:
+          ssh-private-key: ${{ secrets.GAMESERVER_SSH_KEY }}
+
+      - name: Show loaded SSH keys
+        run: ssh-add -l
+
+      - name: List ~/.ssh directory
+        run: ls -la ~/.ssh
+
+      - name: Raw SSH connect debug
+        run: ssh -vvv -o StrictHostKeyChecking=no \
+              ${{ secrets.GAMESERVER_USER }}@${{ secrets.GAMESERVER_HOST }} exit || true
