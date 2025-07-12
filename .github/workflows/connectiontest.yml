@@ -162,12 +162,9 @@ jobs:
           
           # Test basic tmux commands
           echo "Testen van tmux commands..."
-          if tmux list-sessions >/dev/null 2>&1; then
-            echo "✓ tmux list-sessions werkt"
-          else
-            echo "✗ tmux list-sessions gefaald"
-            exit 1
-          fi
+          # tmux list-sessions returns exit code 1 when no sessions exist, which is normal
+          tmux list-sessions 2>/dev/null || echo "Geen actieve tmux sessies (dit is normaal)"
+          echo "✓ tmux command interface werkt"
           
           # Check if existing minecraft session is running
           if tmux has-session -t hemme-mc 2>/dev/null; then
