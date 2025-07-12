@@ -1,12 +1,11 @@
-# ================================
-# deploy.yml – minecraft deploy + service beheer
-# ================================
+# =====================================
+# deploy.yml – Minecraft‑server uitrollen
+# =====================================
 name: Deploy Minecraft Server
-
 on:
   push:
     branches: [ Gameserver ]
-  workflow_dispatch: {}
+  workflow_dispatch:
 
 jobs:
   deploy:
@@ -14,6 +13,9 @@ jobs:
     defaults:
       run:
         shell: bash
+    env:
+      HOST: ${{ secrets.GAMESERVER_HOST }}
+      USER: ${{ secrets.GAMESERVER_USER }}
     steps:
       - uses: actions/checkout@v4
 
@@ -23,33 +25,25 @@ jobs:
           ssh-private-key: ${{ secrets.GAMESERVER_SSH_KEY }}
 
       - name: Add host key
-        run: |
-          ssh-keyscan -t ed25519 -H ${{ secrets.GAMESERVER_HOST }} >> ~/.ssh/known_hosts
+        run: ssh-keyscan -t ed25519 -H "$HOST" >> ~/.ssh/known_hosts
 
-      # 1) Zorg weer voor deps (tmux + Java) voor de deploy
-      - name: Ensure deps present
+      - name: Zorg dat tmux en Java aanwezig zijn
         run: |
-          ssh ${{ secrets.GAMESERVER_USER }}@${{ secrets.GAMESERVER_HOST }} '/bin/bash -s' <<'EOS'
+          ssh "$USER@$HOST" <<'EOS'
           set -e
-          if ! command -v tmux >/dev/null; then sudo apt-get update -qq && sudo apt-get install -y tmux; fi
-          if ! java -version 2>&1 | grep -q "17\|24"; then sudo apt-get update -qq && sudo apt-get install -y openjdk-17-jdk; fi
+          install() { sudo -n true 2>/dev/null && sudo apt-get update -qq && sudo apt-get install -y "$@"; }
+          command -v tmux >/dev/null || install tmux || echo "tmux niet geïnstalleerd (geen sudo)"
+          java -version 2>&1 | grep -q "\(24\|17\)" || install openjdk-24-jdk || install openjdk-17-jdk || echo "Java niet geïnstalleerd (geen sudo)"
           EOS
 
-      # 2) Kopieer build‑files naar server
-      - name: Sync server files
-        run: |
-          rsync -avz --delete ./server/ ${{ secrets.GAMESERVER_USER }}@${{ secrets.GAMESERVER_HOST }}:/srv/minecraft/
+      - name: Bestanden kopiëren
+        run: rsync -avz --delete ./server/ "$USER@$HOST:/srv/minecraft/"
 
-      # 3) Start of herstart via tmux (valt terug op systemctl service als die bestaat)
-      - name: Restart via tmux
+      - name: Server herstarten via tmux
         run: |
-          ssh ${{ secrets.GAMESERVER_USER }}@${{ secrets.GAMESERVER_HOST }} <<'EOS'
+          ssh "$USER@$HOST" <<'EOS'
+          set -e
           tmux has-session -t mc 2>/dev/null && tmux kill-session -t mc || true
           tmux new-session -d -s mc 'cd /srv/minecraft && bash start.sh'
+          echo "tmux‑sessie 'mc' opnieuw gestart"
           EOS
-
-      # 4) systemd service
-      - name: Reload systemd service (if exists)
-        run: |
-          ssh -o StrictHostKeyChecking=yes ${{ secrets.GAMESERVER_USER }}@${{ secrets.GAMESERVER_HOST }} \
-            'sudo systemctl is-enabled minecraft && sudo systemctl restart minecraft || echo "systemd service ontbreekt, tmux gestart"'
