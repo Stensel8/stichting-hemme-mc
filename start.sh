@@ -39,30 +39,32 @@ print_fout() {
 
 # Download en verifieer het JAR bestand
 download_paper() {
-    if [[ -f "$JAR_NAAM" ]]; then
+    local jar_path="$DATA_DIR/$JAR_NAAM"
+    
+    if [[ -f "$jar_path" ]]; then
         print_info "$JAR_NAAM is al gedownload. Checksum verifiëren..."
         local checksum
-        checksum=$(sha256sum "$JAR_NAAM" | awk '{print $1}')
+        checksum=$(sha256sum "$jar_path" | awk '{print $1}')
         
         if [[ "$checksum" == "$JAR_HASH" ]]; then
             print_succes "Checksum is geldig. Geen download nodig."
             return
         else
             print_fout "Checksum komt niet overeen! Bestand opnieuw downloaden..."
-            rm -f "$JAR_NAAM"
+            rm -f "$jar_path"
         fi
     fi
     
     print_info "PaperMC downloaden..."
-    wget -q --show-progress -O "$JAR_NAAM" "$JAR_URL"
+    wget -q --show-progress -O "$jar_path" "$JAR_URL"
     
     print_info "Checksum verifiëren..."
     local checksum
-    checksum=$(sha256sum "$JAR_NAAM" | awk '{print $1}')
+    checksum=$(sha256sum "$jar_path" | awk '{print $1}')
     
     if [[ "$checksum" != "$JAR_HASH" ]]; then
         print_fout "Checksum komt niet overeen! Download is mogelijk corrupt."
-        rm -f "$JAR_NAAM"
+        rm -f "$jar_path"
         exit 1
     fi
     
@@ -196,10 +198,12 @@ print_info "Java versie: $JAVA_VERSION"
 
 # Maak server directory
 mkdir -p "$DATA_DIR"
-cd "$DATA_DIR"
 
-# Download PaperMC
+# Download PaperMC (nu dat directory bestaat)
 download_paper
+
+# Ga naar server directory voor de rest van de operaties
+cd "$DATA_DIR"
 
 # Accepteer EULA automatisch (voor eerste keer)
 if [[ ! -f "eula.txt" ]] || ! grep -q "eula=true" "eula.txt" 2>/dev/null; then
@@ -222,17 +226,17 @@ echo "  • CPU cores: 4"
 echo "  • Server type: PaperMC 1.21.7"
 echo "  • Data directory: $DATA_DIR"
 echo "  • JAR bestand: $JAR_NAAM"
-echo "  • EULA status: $(if [[ -f "$DATA_DIR/eula.txt" ]] && grep -q "eula=true" "$DATA_DIR/eula.txt"; then echo "✓ Geaccepteerd"; else echo "✗ Niet gevonden"; fi)"
+echo "  • EULA status: $(if [[ -f "eula.txt" ]] && grep -q "eula=true" "eula.txt"; then echo "✓ Geaccepteerd"; else echo "✗ Niet gevonden"; fi)"
 echo ""
 
 # Controleer of alle bestanden kloppen voordat we starten
-if [[ ! -f "$DATA_DIR/$JAR_NAAM" ]]; then
-    print_fout "JAR bestand niet gevonden in $DATA_DIR/$JAR_NAAM"
+if [[ ! -f "$JAR_NAAM" ]]; then
+    print_fout "JAR bestand niet gevonden in $(pwd)/$JAR_NAAM"
     exit 1
 fi
 
-if [[ ! -f "$DATA_DIR/eula.txt" ]] || ! grep -q "eula=true" "$DATA_DIR/eula.txt"; then
-    print_fout "EULA niet correct ingesteld in $DATA_DIR/eula.txt"
+if [[ ! -f "eula.txt" ]] || ! grep -q "eula=true" "eula.txt"; then
+    print_fout "EULA niet correct ingesteld in $(pwd)/eula.txt"
     exit 1
 fi
 
