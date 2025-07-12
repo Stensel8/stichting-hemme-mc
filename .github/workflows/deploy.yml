@@ -131,8 +131,20 @@ jobs:
           ssh "$USER@$HOST" <<EOF
           set -e
           
-          # Check if tmux session exists
-          if tmux has-session -t hemme-mc 2>/dev/null; then
+          # Function to check if server is actually running (not just tmux session)
+          is_minecraft_running() {
+            if tmux has-session -t hemme-mc 2>/dev/null; then
+              # Check if there's actual output/activity in the session
+              RECENT_OUTPUT=\$(tmux capture-pane -t hemme-mc -p 2>/dev/null | tail -5)
+              if [[ -n "\$RECENT_OUTPUT" ]] && ! echo "\$RECENT_OUTPUT" | grep -q "\\[exited\\]"; then
+                return 0  # Server is running
+              fi
+            fi
+            return 1  # Server not running
+          }
+          
+          # Check if tmux session exists and is actually running minecraft
+          if is_minecraft_running; then
             echo "Bestaande server gevonden, spelers waarschuwen..."
             
             # Send warning messages to all players with commit info
@@ -151,13 +163,13 @@ jobs:
             # Send stop command to the server console
             tmux send-keys -t hemme-mc 'stop' Enter
             
-            # Wait for server to shut down (max 60 seconds)
-            for i in {1..60}; do
-              if ! tmux has-session -t hemme-mc 2>/dev/null; then
-                echo "Server succesvol gestopt na $i seconden"
+            # Wait for server to shut down (max 90 seconds for graceful shutdown)
+            for i in {1..90}; do
+              if ! is_minecraft_running; then
+                echo "Server succesvol gestopt na \$i seconden"
                 break
               fi
-              echo "Wachten op server shutdown... ($i/60)"
+              echo "Wachten op server shutdown... (\$i/90)"
               sleep 1
             done
             
@@ -165,23 +177,53 @@ jobs:
             if tmux has-session -t hemme-mc 2>/dev/null; then
               echo "Timeout bereikt, forceren van session kill..."
               tmux kill-session -t hemme-mc
+              sleep 2
             fi
           else
-            echo "Geen bestaande server sessie gevonden"
+            echo "Geen actieve server sessie gevonden"
+            # Clean up any dead tmux sessions
+            tmux kill-session -t hemme-mc 2>/dev/null || true
           fi
           
-          # Start new server session
-          echo "Nieuwe server sessie starten..."
-          tmux new-session -d -s hemme-mc 'cd /srv/minecraft && bash start.sh'
+          # Ensure we're in the right directory
+          cd /srv/minecraft
           
-          # Wait a moment and verify the session started
-          sleep 2
-          if tmux has-session -t hemme-mc 2>/dev/null; then
-            echo "✓ Server succesvol gestart in tmux sessie 'hemme-mc'"
-          else
-            echo "✗ Fout bij starten van server"
+          # Clean up any existing lock files
+          rm -f server-data/world/session.lock 2>/dev/null || true
+          
+          # Start new server session with better error handling
+          echo "Nieuwe server sessie starten..."
+          if ! tmux new-session -d -s hemme-mc 'cd /srv/minecraft && bash start.sh'; then
+            echo "✗ Fout bij aanmaken van tmux sessie"
             exit 1
           fi
+          
+          # Wait longer and verify the session started properly
+          echo "Wachten op server startup..."
+          for i in {1..30}; do
+            if tmux has-session -t hemme-mc 2>/dev/null; then
+              # Check if the session content looks healthy
+              SESSION_CONTENT=\$(tmux capture-pane -t hemme-mc -p 2>/dev/null || echo "")
+              if [[ -n "\$SESSION_CONTENT" ]] && ! echo "\$SESSION_CONTENT" | grep -q "\\[exited\\]"; then
+                echo "✓ Server sessie succesvol gestart in tmux sessie 'hemme-mc'"
+                break
+              fi
+            fi
+            
+            if [[ \$i -eq 30 ]]; then
+              echo "✗ Server sessie start timeout - diagnostiek uitvoeren..."
+              echo "Tmux sessies:"
+              tmux list-sessions 2>/dev/null || echo "Geen tmux sessies"
+              if tmux has-session -t hemme-mc 2>/dev/null; then
+                echo "Sessie inhoud:"
+                tmux capture-pane -t hemme-mc -p 2>/dev/null || echo "Kan sessie inhoud niet lezen"
+              fi
+              exit 1
+            fi
+            
+            echo "Wachten op server startup... (\$i/30)"
+            sleep 2
+          done
           EOF
 
       - name: Controleer server status
@@ -189,23 +231,117 @@ jobs:
           ssh "$USER@$HOST" <<'EOS'
           echo "=== Server Status Check ==="
           
-          if tmux has-session -t hemme-mc 2>/dev/null; then
-            echo "✓ Tmux sessie 'hemme-mc' is actief"
-            
-            # Check if Java process is running
-            if pgrep -f "java.*server" >/dev/null; then
-              echo "✓ Minecraft server proces is actief"
+          # Function to get detailed server status
+          get_server_status() {
+            if tmux has-session -t hemme-mc 2>/dev/null; then
+              echo "✓ Tmux sessie 'hemme-mc' is actief"
+              
+              # Get session info
+              SESSION_INFO=$(tmux list-sessions | grep hemme-mc || echo "Sessie info niet beschikbaar")
+              echo "  Sessie details: $SESSION_INFO"
+              
+              # Check session content for signs of life
+              echo "  Controleren van sessie activiteit..."
+              SESSION_CONTENT=$(tmux capture-pane -t hemme-mc -p 2>/dev/null || echo "")
+              
+              if [[ -n "$SESSION_CONTENT" ]]; then
+                # Look for recent server activity
+                if echo "$SESSION_CONTENT" | grep -q "\[exited\]"; then
+                  echo "  ⚠ Sessie is geëindigd (crashed)"
+                  echo "  Laatste output:"
+                  echo "$SESSION_CONTENT" | tail -10 | sed 's/^/    /'
+                  return 1
+                elif echo "$SESSION_CONTENT" | tail -10 | grep -qE "(Done|Timings Reset|Server thread|INFO)"; then
+                  echo "  ✓ Server lijkt actief te zijn"
+                else
+                  echo "  ⚠ Server output onduidelijk, mogelijk nog aan het opstarten"
+                  echo "  Recente output:"
+                  echo "$SESSION_CONTENT" | tail -5 | sed 's/^/    /'
+                fi
+              else
+                echo "  ⚠ Kan sessie inhoud niet lezen"
+              fi
+              
+              # Check if Java process is running
+              if pgrep -f "java.*hemme-mc.jar" >/dev/null; then
+                JAVA_PID=$(pgrep -f "java.*hemme-mc.jar")
+                echo "  ✓ Minecraft server proces is actief (PID: $JAVA_PID)"
+                
+                # Check process details
+                if command -v ps >/dev/null; then
+                  echo "  Process details:"
+                  ps -p "$JAVA_PID" -o pid,ppid,cmd --no-headers | sed 's/^/    /'
+                fi
+              else
+                echo "  ⚠ Geen Java proces gevonden voor hemme-mc.jar"
+                echo "  Alle Java processen:"
+                pgrep -fl java | sed 's/^/    /' || echo "    Geen Java processen gevonden"
+                return 1
+              fi
+              
+              # Check listening ports (Minecraft default: 25565)
+              echo "  Network status:"
+              if command -v netstat >/dev/null; then
+                if netstat -tuln 2>/dev/null | grep -q ":25565"; then
+                  echo "    ✓ Server luistert op poort 25565"
+                else
+                  echo "    ⚠ Server luistert niet op poort 25565"
+                fi
+              elif command -v ss >/dev/null; then
+                if ss -tuln 2>/dev/null | grep -q ":25565"; then
+                  echo "    ✓ Server luistert op poort 25565"
+                else
+                  echo "    ⚠ Server luistert niet op poort 25565"
+                fi
+              fi
+              
+              return 0
             else
-              echo "⚠ Tmux sessie bestaat maar geen Java proces gevonden"
+              echo "✗ Tmux sessie 'hemme-mc' niet gevonden"
+              return 1
             fi
-            
-            echo ""
-            echo "Om server logs te bekijken: tmux attach -t hemme-mc"
-            echo "Om server console te openen: tmux send-keys -t hemme-mc"
-          else
-            echo "✗ Tmux sessie 'hemme-mc' niet gevonden"
-            exit 1
-          fi
+          }
+          
+          # Perform status check with retries
+          for attempt in {1..3}; do
+            echo "Status check poging $attempt/3..."
+            if get_server_status; then
+              echo ""
+              echo "✓ Server status check succesvol"
+              echo ""
+              echo "Commands voor server beheer:"
+              echo "- Logs bekijken: tmux attach -t hemme-mc"
+              echo "- Server console: tmux send-keys -t hemme-mc 'command' Enter"
+              echo "- Sessie verlaten: Ctrl+B dan D"
+              break
+            else
+              if [[ $attempt -lt 3 ]]; then
+                echo "Status check gefaald, opnieuw proberen over 10 seconden..."
+                sleep 10
+              else
+                echo ""
+                echo "✗ Server status check definitief gefaald na 3 pogingen"
+                echo ""
+                echo "Diagnostische informatie:"
+                echo "Alle tmux sessies:"
+                tmux list-sessions 2>/dev/null || echo "  Geen tmux sessies"
+                echo ""
+                echo "Alle Java processen:"
+                pgrep -fl java | sed 's/^/  /' || echo "  Geen Java processen"
+                echo ""
+                echo "Minecraft directory contents:"
+                ls -la /srv/minecraft/server-data/ | head -10 | sed 's/^/  /'
+                echo ""
+                echo "Recent logs (indien beschikbaar):"
+                if [[ -f /srv/minecraft/server-data/logs/latest.log ]]; then
+                  tail -20 /srv/minecraft/server-data/logs/latest.log | sed 's/^/  /'
+                else
+                  echo "  Geen logs beschikbaar"
+                fi
+                exit 1
+              fi
+            fi
+          done
           EOS
 
       - name: Verzend welkom bericht na herstart
@@ -213,24 +349,143 @@ jobs:
           ssh "$USER@$HOST" <<'EOS'
           echo "=== Welkom Bericht ==="
           
-          # Wait for server to fully start (check for "Done" message or similar)
+          # Function to check if server is fully started
+          is_server_ready() {
+            if tmux has-session -t hemme-mc 2>/dev/null; then
+              SERVER_OUTPUT=$(tmux capture-pane -t hemme-mc -p 2>/dev/null | tail -20)
+              if echo "$SERVER_OUTPUT" | grep -qE "(Done \([0-9.]+s\)|Timings Reset|Server thread/INFO.*Done)"; then
+                return 0
+              fi
+            fi
+            return 1
+          }
+          
+          # Wait for server to fully start with better detection
           echo "Wachten tot server volledig gestart is..."
-          for i in {1..30}; do
-            if tmux capture-pane -t hemme-mc -p | tail -10 | grep -q "Done\|Timings Reset"; then
-              echo "Server is volledig opgestart, welkom bericht verzenden..."
-              sleep 2
+          for i in {1..60}; do
+            if is_server_ready; then
+              echo "Server is volledig opgestart na $i*2 seconden, welkom bericht verzenden..."
+              sleep 3
+              
+              # Send welcome message
               tmux send-keys -t hemme-mc 'say §a§l[SERVER] §6Server update voltooid! Welkom terug! 🎉' Enter
+              sleep 1
+              tmux send-keys -t hemme-mc 'say §a§l[SERVER] §7Deployment succesvol uitgevoerd.' Enter
+              
+              echo "✓ Welkom bericht verzonden naar spelers"
+              
+              # Also log server startup completion
+              echo "Server startup voltooid op $(date)"
               break
             fi
-            echo "Wachten op server startup... ($i/30)"
+            
+            # Show progress every 10 iterations
+            if [[ $((i % 10)) -eq 0 ]]; then
+              echo "Wachten op server startup... ($((i*2))/120 seconden)"
+              # Show recent server output for debugging
+              if tmux has-session -t hemme-mc 2>/dev/null; then
+                RECENT_OUTPUT=$(tmux capture-pane -t hemme-mc -p 2>/dev/null | tail -3)
+                if [[ -n "$RECENT_OUTPUT" ]]; then
+                  echo "  Recente server output:"
+                  echo "$RECENT_OUTPUT" | sed 's/^/    /'
+                fi
+              fi
+            fi
             sleep 2
           done
           
-          if [ $i -eq 30 ]; then
-            echo "⚠ Server opstart timeout, welkom bericht niet verzonden"
-          else
-            echo "✓ Welkom bericht verzonden naar spelers"
+          if [[ $i -eq 60 ]]; then
+            echo "⚠ Server opstart timeout na 120 seconden"
+            echo "Server output voor diagnostiek:"
+            if tmux has-session -t hemme-mc 2>/dev/null; then
+              tmux capture-pane -t hemme-mc -p 2>/dev/null | tail -10 | sed 's/^/  /'
+            else
+              echo "  Geen tmux sessie beschikbaar"
+            fi
+            echo "Welkom bericht niet verzonden, maar deployment gaat door"
           fi
+          EOS
+
+      - name: Server crash diagnostiek (bij problemen)
+        if: failure()
+        run: |
+          ssh "$USER@$HOST" <<'EOS'
+          echo "=== Server Crash Diagnostiek ==="
+          echo "Er is een probleem gedetecteerd, diagnostische informatie verzamelen..."
+          
+          # Check tmux sessions
+          echo "Tmux sessies:"
+          tmux list-sessions 2>/dev/null || echo "  Geen tmux sessies actief"
+          
+          # Check if hemme-mc session exists and get its content
+          if tmux has-session -t hemme-mc 2>/dev/null; then
+            echo ""
+            echo "Hemme-mc sessie content (laatste 50 regels):"
+            tmux capture-pane -t hemme-mc -p 2>/dev/null | tail -50 | sed 's/^/  /' || echo "  Kan sessie content niet ophalen"
+          fi
+          
+          # Check for Java processes
+          echo ""
+          echo "Java processen:"
+          pgrep -fl java | sed 's/^/  /' || echo "  Geen Java processen gevonden"
+          
+          # Check server logs
+          echo ""
+          echo "Server logs (laatste 50 regels):"
+          if [[ -f /srv/minecraft/server-data/logs/latest.log ]]; then
+            tail -50 /srv/minecraft/server-data/logs/latest.log | sed 's/^/  /'
+          else
+            echo "  Geen latest.log gevonden"
+          fi
+          
+          # Check for crash reports
+          echo ""
+          echo "Crash reports:"
+          if [[ -d /srv/minecraft/server-data/crash-reports ]]; then
+            CRASH_REPORTS=$(find /srv/minecraft/server-data/crash-reports -name "*.txt" -type f -mtime -1 2>/dev/null)
+            if [[ -n "$CRASH_REPORTS" ]]; then
+              echo "  Recente crash reports gevonden:"
+              echo "$CRASH_REPORTS" | sed 's/^/    /'
+              echo ""
+              echo "  Laatste crash report:"
+              LATEST_CRASH=$(echo "$CRASH_REPORTS" | head -1)
+              if [[ -f "$LATEST_CRASH" ]]; then
+                head -30 "$LATEST_CRASH" | sed 's/^/    /'
+              fi
+            else
+              echo "  Geen recente crash reports"
+            fi
+          else
+            echo "  Crash reports directory niet gevonden"
+          fi
+          
+          # Check system resources
+          echo ""
+          echo "Systeem resources:"
+          echo "  Memory:"
+          free -h | sed 's/^/    /'
+          echo "  Disk space:"
+          df -h /srv/minecraft | sed 's/^/    /'
+          echo "  Load average:"
+          uptime | sed 's/^/    /'
+          
+          # Check Java version and configuration
+          echo ""
+          echo "Java informatie:"
+          java -version 2>&1 | sed 's/^/  /'
+          
+          # Check file permissions
+          echo ""
+          echo "File permissions voor server-data:"
+          ls -la /srv/minecraft/server-data/ | head -10 | sed 's/^/  /'
+          
+          # Check for lock files
+          echo ""
+          echo "Lock files check:"
+          find /srv/minecraft/server-data -name "*.lock" -type f 2>/dev/null | sed 's/^/  /' || echo "  Geen lock files gevonden"
+          
+          echo ""
+          echo "=== Einde Diagnostiek ==="
           EOS
 
       - name: Deployment samenvatting
@@ -250,9 +505,17 @@ jobs:
           echo "- Logs bekijken: ssh ${{ env.USER }}@${{ env.HOST }} -t 'tmux attach -t hemme-mc'"
           echo "- Server console: ssh ${{ env.USER }}@${{ env.HOST }} -t 'tmux send-keys -t hemme-mc'"
           echo ""
+          echo "Troubleshooting commands:"
+          echo "- Server status: ssh ${{ env.USER }}@${{ env.HOST }} 'tmux has-session -t hemme-mc && echo Actief || echo Niet actief'"
+          echo "- Java processen: ssh ${{ env.USER }}@${{ env.HOST }} 'pgrep -fl java'"
+          echo "- Recente logs: ssh ${{ env.USER }}@${{ env.HOST }} 'tail -50 /srv/minecraft/server-data/logs/latest.log'"
+          echo "- Server herstarten: ssh ${{ env.USER }}@${{ env.HOST }} 'cd /srv/minecraft && ./start.sh'"
+          echo ""
           echo "Workflow details:"
           if [ "${{ github.event_name }}" = "workflow_run" ]; then
             echo "- Gestart na succesvolle connection test"
           else
             echo "- Handmatig gestart (connection test overgeslagen)"
           fi
+          echo "- Commit: $(git rev-parse --short HEAD)"
+          echo "- Deployment tijd: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
