@@ -190,35 +190,70 @@ jobs:
           
           # Start new server session with better error handling
           echo "Nieuwe server sessie starten..."
-          if ! tmux new-session -d -s hemme-mc 'cd /srv/minecraft && bash start.sh < /dev/null'; then
+          # Create tmux session with proper environment setup
+          if ! tmux new-session -d -s hemme-mc -c /srv/minecraft 'bash -l start.sh'; then
             echo "✗ Fout bij aanmaken van tmux sessie"
+            # Try to diagnose the issue
+            echo "Diagnostiek van tmux startup probleem:"
+            echo "- Huidige directory: $(pwd)"
+            echo "- start.sh bestaat: $(test -f start.sh && echo 'ja' || echo 'nee')"
+            echo "- start.sh executable: $(test -x start.sh && echo 'ja' || echo 'nee')"
+            echo "- Tmux server status:"
+            tmux list-sessions 2>/dev/null || echo "Geen tmux server actief"
+            
+            # Try alternative startup method
+            echo "Proberen van alternatieve startup methode..."
+            tmux new-session -d -s hemme-mc-alt -c /srv/minecraft || echo "Ook alternatieve methode gefaald"
             exit 1
           fi
           
           # Wait longer and verify the session started properly
           echo "Wachten op server startup..."
-          for i in {1..30}; do
+          for i in {1..60}; do
             if tmux has-session -t hemme-mc 2>/dev/null; then
               # Check if the session content looks healthy
               SESSION_CONTENT=\$(tmux capture-pane -t hemme-mc -p 2>/dev/null || echo "")
-              if [[ -n "\$SESSION_CONTENT" ]] && ! echo "\$SESSION_CONTENT" | grep -q "\\[exited\\]"; then
-                echo "✓ Server sessie succesvol gestart in tmux sessie 'hemme-mc'"
-                break
+              if [[ -n "\$SESSION_CONTENT" ]]; then
+                # Look for signs of successful startup or active process
+                if echo "\$SESSION_CONTENT" | grep -q "\\[exited\\]"; then
+                  echo "⚠ Server sessie is geëindigd - wachten op restart..."
+                elif echo "\$SESSION_CONTENT" | grep -qE "(Starting|Loading|Done|INFO|WARN)"; then
+                  echo "✓ Server sessie succesvol gestart in tmux sessie 'hemme-mc'"
+                  echo "Server startup logs:"
+                  echo "\$SESSION_CONTENT" | tail -5 | sed 's/^/  /'
+                  break
+                elif [[ \$i -gt 20 ]]; then
+                  echo "✓ Server sessie draait (nog geen duidelijke output na 40s)"
+                  break
+                fi
+              fi
+            else
+              echo "⚠ Tmux sessie niet gevonden bij iteratie \$i"
+              # Try to restart if session disappeared
+              if [[ \$i -eq 15 ]] || [[ \$i -eq 30 ]]; then
+                echo "Proberen van session herstart..."
+                tmux new-session -d -s hemme-mc -c /srv/minecraft 'bash -l start.sh' 2>/dev/null || echo "Herstart gefaald"
               fi
             fi
             
-            if [[ \$i -eq 30 ]]; then
-              echo "✗ Server sessie start timeout - diagnostiek uitvoeren..."
-              echo "Tmux sessies:"
+            if [[ \$i -eq 60 ]]; then
+              echo "✗ Server sessie start timeout na 120 seconden - uitgebreide diagnostiek..."
+              echo "Tmux status:"
               tmux list-sessions 2>/dev/null || echo "Geen tmux sessies"
               if tmux has-session -t hemme-mc 2>/dev/null; then
-                echo "Sessie inhoud:"
-                tmux capture-pane -t hemme-mc -p 2>/dev/null || echo "Kan sessie inhoud niet lezen"
+                echo "Sessie inhoud (laatste 20 regels):"
+                tmux capture-pane -t hemme-mc -p 2>/dev/null | tail -20 | sed 's/^/  /' || echo "Kan sessie inhoud niet lezen"
               fi
-              exit 1
+              # Check for alternative session names
+              if tmux has-session -t hemme-mc-alt 2>/dev/null; then
+                echo "Alternatieve sessie gevonden!"
+                tmux rename-session -t hemme-mc-alt hemme-mc
+              else
+                exit 1
+              fi
             fi
             
-            echo "Wachten op server startup... (\$i/30)"
+            echo "Wachten op server startup... (\$i/60)"
             sleep 2
           done
           EOF

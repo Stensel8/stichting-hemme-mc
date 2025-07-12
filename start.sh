@@ -154,11 +154,36 @@ fix_permissions() {
 start_server() {
     local force_restart="${1:-false}"
     
-    tmux has-session -t "$SESSION" 2>/dev/null && {
-        info "Existing session '$SESSION' found, restarting server..."
-        tmux kill-session -t "$SESSION"
-        sleep 2
-    }
+    # Kill any existing session more thoroughly
+    if tmux has-session -t "$SESSION" 2>/dev/null; then
+        info "Existing session '$SESSION' found, stopping gracefully..."
+        
+        # Try to send stop command first
+        tmux send-keys -t "$SESSION" 'stop' Enter 2>/dev/null || true
+        sleep 5
+        
+        # Force kill the session
+        tmux kill-session -t "$SESSION" 2>/dev/null || true
+        sleep 3
+        
+        # Ensure session is completely gone
+        for i in {1..10}; do
+            if ! tmux has-session -t "$SESSION" 2>/dev/null; then
+                break
+            fi
+            sleep 1
+        done
+    fi
+    
+    # Ensure tmux server is running
+    if ! tmux list-sessions >/dev/null 2>&1; then
+        info "Starting tmux server..."
+        tmux new-session -d -s temp-session 'echo "tmux server started"; sleep 1' || {
+            error "Failed to start tmux server"
+            exit 1
+        }
+        tmux kill-session -t temp-session 2>/dev/null || true
+    fi
     
     info "Starting server in tmux session '$SESSION'..."
     info "Working directory: $(pwd)"
@@ -168,21 +193,73 @@ start_server() {
     grep -q "set -g mouse on" "$HOME/.tmux.conf" 2>/dev/null || 
         echo "set -g mouse on" >> "$HOME/.tmux.conf"
     
-    # Create tmux session in the current directory (should be $DATA_DIR)
-    tmux new-session -d -s "$SESSION" -c "$(pwd)" "${JAVA_CMD[@]}"
-    sleep 3
-    
-    if tmux has-session -t "$SESSION" 2>/dev/null; then
-        success "Server started!"
-        echo "Connect: tmux attach -t $SESSION"
-        echo "Detach: Ctrl+B then D"
-        echo "List sessions: tmux ls"
-    else
-        error "Failed to start tmux session"
-        info "Checking if tmux server is running..."
-        tmux list-sessions 2>/dev/null || echo "No tmux server running"
-        exit 1
+    # Source environment properly in tmux session
+    local tmux_command=""
+    if [[ -f "$HOME/.sdkman/bin/sdkman-init.sh" ]]; then
+        tmux_command="source '$HOME/.sdkman/bin/sdkman-init.sh'; sdk use java '$JAVA_VERSION'; "
     fi
+    tmux_command+="cd '$(pwd)'; ${JAVA_CMD[*]}"
+    
+    # Create tmux session with better error handling
+    if ! tmux new-session -d -s "$SESSION" -c "$(pwd)" "$tmux_command"; then
+        error "Failed to create tmux session with Java command"
+        
+        # Try fallback method: create session first, then send commands
+        info "Trying fallback startup method..."
+        if tmux new-session -d -s "$SESSION" -c "$(pwd)"; then
+            sleep 1
+            
+            # Source SDKMAN if available
+            if [[ -f "$HOME/.sdkman/bin/sdkman-init.sh" ]]; then
+                tmux send-keys -t "$SESSION" "source '$HOME/.sdkman/bin/sdkman-init.sh'" Enter
+                sleep 1
+                tmux send-keys -t "$SESSION" "sdk use java '$JAVA_VERSION'" Enter
+                sleep 1
+            fi
+            
+            # Start the server
+            tmux send-keys -t "$SESSION" "${JAVA_CMD[*]}" Enter
+        else
+            error "Both primary and fallback tmux session creation failed"
+            exit 1
+        fi
+    fi
+    
+    # Verify session was created and is active
+    sleep 5
+    local retries=0
+    while [[ $retries -lt 10 ]]; do
+        if tmux has-session -t "$SESSION" 2>/dev/null; then
+            # Check if session has content (not just empty)
+            local session_content=$(tmux capture-pane -t "$SESSION" -p 2>/dev/null || echo "")
+            if [[ -n "$session_content" ]]; then
+                success "Server started!"
+                echo "Session content preview:"
+                echo "$session_content" | tail -3 | sed 's/^/  /'
+                echo
+                echo "Connect: tmux attach -t $SESSION"
+                echo "Detach: Ctrl+B then D"
+                echo "List sessions: tmux ls"
+                return 0
+            fi
+        fi
+        
+        retries=$((retries + 1))
+        info "Waiting for session to become active... ($retries/10)"
+        sleep 2
+    done
+    
+    error "Failed to start tmux session or session appears empty"
+    info "Debugging information:"
+    echo "  Tmux sessions:"
+    tmux list-sessions 2>/dev/null || echo "    No tmux sessions"
+    if tmux has-session -t "$SESSION" 2>/dev/null; then
+        echo "  Session exists but may be empty or crashed"
+        local content=$(tmux capture-pane -t "$SESSION" -p 2>/dev/null || echo "No content")
+        echo "  Last 10 lines of session:"
+        echo "$content" | tail -10 | sed 's/^/    /'
+    fi
+    exit 1
 }
 
 # Main execution
@@ -193,12 +270,18 @@ main() {
     echo "║       PaperMC 1.21.7 • 10GB RAM      ║"
     echo "╚══════════════════════════════════════╝"
     
+    # Ensure we're in the script's directory
+    cd "$(dirname "${BASH_SOURCE[0]}")"
+    info "Script directory: $(pwd)"
+    
     setup_java
     
     mkdir -p "$DATA_DIR"
     download_jar
     
+    # Change to data directory for server execution
     cd "$DATA_DIR"
+    info "Server data directory: $(pwd)"
     
     # Fix permissions before starting server
     fix_permissions
@@ -216,10 +299,24 @@ main() {
     echo "  • RAM: $RAM"
     echo "  • CPU cores: $(nproc)"
     echo "  • Java: $(java -version 2>&1 | head -n1 | cut -d'"' -f2)"
-    echo "  • Data dir: $DATA_DIR"
+    echo "  • Working dir: $(pwd)"
+    echo "  • Java home: ${JAVA_HOME:-not set}"
+    echo "  • Tmux version: $(tmux -V 2>/dev/null || echo 'not found')"
     echo
     
+    # Final permission fix and cleanup
     fix_permissions
+    
+    # Ensure no conflicting processes
+    info "Checking for existing Java processes..."
+    local existing_java=$(pgrep -f "hemme-mc.jar" || echo "")
+    if [[ -n "$existing_java" ]]; then
+        info "Found existing Java process(es): $existing_java"
+        info "Stopping existing processes..."
+        pkill -f "hemme-mc.jar" || true
+        sleep 3
+    fi
+    
     start_server
 }
 
