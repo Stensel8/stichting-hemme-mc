@@ -22,11 +22,12 @@ jobs:
       - name: Sync files via rsync
         run: |
           rsync -avz --delete \
-            -e "ssh -o StrictHostKeyChecking=accept-new" \
+            -e "ssh -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes" \
             ./ ${{ secrets.GAMESERVER_USER }}@${{ secrets.GAMESERVER_HOST }}:/srv/minecraft
 
       - name: Herstart Minecraft
         run: |
-          ssh -o StrictHostKeyChecking=accept-new \
+          ssh -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes \
             ${{ secrets.GAMESERVER_USER }}@${{ secrets.GAMESERVER_HOST }} \
             sudo systemctl restart minecraft
+
