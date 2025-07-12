@@ -1,0 +1,30 @@
+name: Deploy Minecraft Server
+
+on:
+  push:
+    branches: [ Gameserver ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Kopieer naar server
+        uses: appleboy/scp-action@v0.1.2
+        with:
+          host: ${{ secrets.GAMESERVER_HOST }}
+          username: ${{ secrets.GAMESERVER_USER }}
+          key: ${{ secrets.GAMESERVER_SSH_KEY }}
+          source: "."
+          target: "/srv/minecraft"
+
+      - name: Herstart Minecraft
+        uses: appleboy/ssh-action@v0.1.5
+        with:
+          host: ${{ secrets.GAMESERVER_HOST }}
+          username: ${{ secrets.GAMESERVER_USER }}
+          key: ${{ secrets.GAMESERVER_SSH_KEY }}
+          script: |
+            sudo systemctl restart minecraft
