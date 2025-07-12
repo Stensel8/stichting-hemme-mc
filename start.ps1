@@ -84,6 +84,7 @@ function Start-MinecraftServer {
         Pop-Location
     }
 }
+
 # --- Script uitvoeren ---
 Get-MinecraftServer
 Start-MinecraftServer
