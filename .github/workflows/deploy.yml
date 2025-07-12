@@ -45,11 +45,11 @@ jobs:
 
       - name: Bestanden kopiëren
         run: |
-          if [ ! -d ./server ]; then
-            echo "Map server/ ontbreekt in repo. Zet je serverbestanden daarin en commit opnieuw."
+          if [ ! -d ./server-data ]; then
+            echo "Map server-data/ ontbreekt in repo. Zet je serverbestanden daarin en commit opnieuw."
             exit 1
           fi
-          rsync -avz --delete ./server/ "$USER@$HOST:/srv/minecraft/"
+          rsync -avz --delete ./server-data/ "$USER@$HOST:/srv/minecraft/server-data/"
 
       - name: Herstart via tmux
         run: |

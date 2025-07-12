@@ -190,7 +190,7 @@ main() {
     clear
     echo "╔══════════════════════════════════════╗"
     echo "║    Stichting Hemme MC Server 2025    ║"
-    echo "║       PaperMC 1.21.7 • 10GB RAM     ║"
+    echo "║       PaperMC 1.21.7 • 10GB RAM      ║"
     echo "╚══════════════════════════════════════╝"
     
     setup_java
