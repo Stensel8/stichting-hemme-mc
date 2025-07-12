@@ -1,244 +1,226 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Stichting Hemme MC Server - Optimized for modern hardware (2021+)
+# Target: i7-1360P, Ryzen 6800H+ etc. etc. with +-10GB RAM allocation
+
 # =====================================================================
-# Stichting Hemme Minecraft Server
 # Stensel8, cdemmer04, Hintenhaus04, powercell86 & PrinsMayo
-# LoadBalancer-1 SPECS TO BE FILLED IN! NOT CONFIGURED YET!
-# GameServer-1   specs: i7-1360P   -> 4-core    | 8GB DDR5  | Fedora Server 42 (Hosted by Stensel8)
-# GameServer-2   specs: i7-12700H  -> 4-core    | 80GB DDR4  | Fedora Server 42 (Hosted by Hintenhaus04)
+#
+# GameServer-1   specs: i7-1360P      | 10GB DDR5  | Fedora Server 42 (Hosted by Stensel8)
 # =====================================================================
 
-# --------------------- PAKETTEN INSTALLEREN --------------------------
-dnf install wget tmux java-21-openjdk -y
+# Config
+readonly JAVA_VERSION="21.0.1-tem"
+readonly DATA_DIR="./server-data"
+readonly JAR_URL="https://api.papermc.io/v2/projects/paper/versions/1.21.7/builds/26/downloads/paper-1.21.7-26.jar"
+readonly JAR_HASH="3c088d399dd3b83764653bee7c7c4f30b207fab7b97c4e4227bf96b853b2158a"
+readonly JAR_NAME="hemme-mc.jar"
+readonly RAM="10G"
+readonly SESSION="hemme-mc"
 
+# Colors
+info() { echo -e "\033[34m[INFO]\033[0m $1"; }
+success() { echo -e "\033[32m[✓]\033[0m $1"; }
+error() { echo -e "\033[31m[✗]\033[0m $1"; }
 
-# --------------------- CONFIGURATIE ---------------------------------
-SERVER_NAAM="stichting-hemme-mc"
-DATA_DIR="./server-data"
-JAR_URL="https://fill-data.papermc.io/v1/objects/3c088d399dd3b83764653bee7c7c4f30b207fab7b97c4e4227bf96b853b2158a/paper-1.21.7-26.jar"
-JAR_HASH="3c088d399dd3b83764653bee7c7c4f30b207fab7b97c4e4227bf96b853b2158a"
-JAR_NAAM="hemme-mc.jar"
-RAM_TOEWIJZING="8G"
-TMUX_SESSIE="hemme-mc"
-
-# --------------------- FUNCTIES -------------------------------------
-
-# Print gekleurd bericht
-print_info() {
-    echo -e "\033[1;34m[INFO]\033[0m $1"
+# Install dependencies
+command -v wget tmux java >/dev/null 2>&1 || {
+    info "Installing dependencies..."
+    dnf install -y wget tmux
 }
 
-print_succes() {
-    echo -e "\033[1;32m[✓]\033[0m $1"
-}
-
-print_fout() {
-    echo -e "\033[1;31m[✗]\033[0m $1"
-}
-
-# Download en verifieer het JAR bestand
-download_paper() {
-    local jar_path="$DATA_DIR/$JAR_NAAM"
-    
-    if [[ -f "$jar_path" ]]; then
-        print_info "$JAR_NAAM is al gedownload. Checksum verifiëren..."
-        local checksum
-        checksum=$(sha256sum "$jar_path" | awk '{print $1}')
-        
-        if [[ "$checksum" == "$JAR_HASH" ]]; then
-            print_succes "Checksum is geldig. Geen download nodig."
-            return
-        else
-            print_fout "Checksum komt niet overeen! Bestand opnieuw downloaden..."
-            rm -f "$jar_path"
-        fi
+# Setup Java via SDKMAN
+setup_java() {
+    if [[ ! -f "$HOME/.sdkman/bin/sdkman-init.sh" ]]; then
+        info "Installing SDKMAN..."
+        curl -s "https://get.sdkman.io" | bash
     fi
     
-    print_info "PaperMC downloaden..."
+    set +u
+    source "$HOME/.sdkman/bin/sdkman-init.sh"
+    
+    [[ ! -d "$HOME/.sdkman/candidates/java/$JAVA_VERSION" ]] && {
+        info "Installing Java $JAVA_VERSION..."
+        sdk install java "$JAVA_VERSION"
+    }
+    
+    sdk use java "$JAVA_VERSION"
+    export PATH="$HOME/.sdkman/candidates/java/$JAVA_VERSION/bin:$PATH"
+    export JAVA_HOME="$HOME/.sdkman/candidates/java/$JAVA_VERSION"
+    set -u
+    
+    success "Java $JAVA_VERSION ready"
+}
+
+# Download and verify JAR
+download_jar() {
+    local jar_path="$DATA_DIR/$JAR_NAME"
+    
+    [[ -f "$jar_path" ]] && {
+        local checksum=$(sha256sum "$jar_path" | cut -d' ' -f1)
+        [[ "$checksum" == "$JAR_HASH" ]] && {
+            success "JAR verified, skipping download"
+            return
+        }
+        info "Checksum mismatch, re-downloading..."
+        rm -f "$jar_path"
+    }
+    
+    info "Downloading PaperMC..."
     wget -q --show-progress -O "$jar_path" "$JAR_URL"
     
-    print_info "Checksum verifiëren..."
-    local checksum
-    checksum=$(sha256sum "$jar_path" | awk '{print $1}')
-    
-    if [[ "$checksum" != "$JAR_HASH" ]]; then
-        print_fout "Checksum komt niet overeen! Download is mogelijk corrupt."
+    local checksum=$(sha256sum "$jar_path" | cut -d' ' -f1)
+    [[ "$checksum" != "$JAR_HASH" ]] && {
+        error "Download corrupted!"
         rm -f "$jar_path"
         exit 1
-    fi
+    }
     
-    print_succes "Download en verificatie succesvol!"
+    success "Download verified"
 }
 
-# Configureer tmux voor betere gebruikservaring
-configureer_tmux() {
-    local tmux_conf="$HOME/.tmux.conf"
-    local marker="set -g mouse on"
+# Generate optimized Java command for modern hardware
+build_java_cmd() {
+    local cores=$(nproc)
+    local gc_threads=$((cores > 4 ? cores / 2 : 2))
     
-    if [[ -f "$tmux_conf" ]] && grep -qF "$marker" "$tmux_conf"; then
-        return
+    # Detect ZGC support
+    if java -XX:+UnlockExperimentalVMOptions -XX:+UseZGC -version &>/dev/null; then
+        info "Using ZGC (ultra-low latency GC)"
+        JAVA_ARGS=(
+            -XX:+UnlockExperimentalVMOptions -XX:+UseZGC
+            -XX:+UnlockDiagnosticVMOptions
+        )
+    else
+        info "Using optimized G1GC"
+        JAVA_ARGS=(
+            -XX:+UseG1GC -XX:+ParallelRefProcEnabled
+            -XX:MaxGCPauseMillis=50 -XX:G1HeapRegionSize=32M
+            -XX:G1NewSizePercent=40 -XX:G1MaxNewSizePercent=50
+            -XX:InitiatingHeapOccupancyPercent=15
+            -XX:ConcGCThreads="$gc_threads"
+        )
     fi
     
-    print_info "Tmux configureren voor muis-ondersteuning..."
-    echo -e "\n# Stichting Hemme MC - tmux configuratie\n$marker" >> "$tmux_conf"
-    print_succes "Tmux geconfigureerd!"
-}
-
-# Maak optimale Java opstart parameters
-genereer_java_cmd() {
-    # Optimalisaties voor high-performance server met 10GB RAM
+    # Core JVM args optimized for modern hardware
     JAVA_CMD=(
-        java
-        -Xms"$RAM_TOEWIJZING"          # Start met toegewezen begin RAM
-        -Xmx"$RAM_TOEWIJZING"          # Maximum RAM
-        
-        # G1GC optimalisaties voor prestaties
-        -XX:+UseG1GC
-        -XX:+ParallelRefProcEnabled
-        -XX:MaxGCPauseMillis=200
-        -XX:+UnlockExperimentalVMOptions
-        -XX:+DisableExplicitGC
-        -XX:+AlwaysPreTouch
-        -XX:G1HeapRegionSize=16M
-        -XX:G1ReservePercent=15
-        -XX:G1NewSizePercent=30
-        -XX:G1MaxNewSizePercent=40
-        -XX:G1HeapWastePercent=5
-        -XX:G1MixedGCCountTarget=4
-        -XX:InitiatingHeapOccupancyPercent=20
-        -XX:G1MixedGCLiveThresholdPercent=90
-        -XX:G1RSetUpdatingPauseTimePercent=5
-        -XX:SurvivorRatio=32
-        -XX:+PerfDisableSharedMem
-        -XX:MaxTenuringThreshold=1
-        
-        # Extra optimalisaties
-        -XX:+UseStringDeduplication
-        -XX:+UseCompressedOops
-        -XX:+OptimizeStringConcat
-        --add-modules=jdk.incubator.vector
-        
-        # PaperMC specifiek
-        -Dpaper.maxChunkThreads=6 
-        -jar "$JAR_NAAM"
-        nogui
+        java -server -Xms"$RAM" -Xmx"$RAM"
+        "${JAVA_ARGS[@]}"
+        -XX:+AlwaysPreTouch -XX:+UseCompressedOops
+        -XX:+UseFastUnorderedTimeStamps -XX:+TieredCompilation
+        -Djava.net.preferIPv4Stack=true -Djava.awt.headless=true
+        -Dpaper.maxChunkThreads="$((cores - 2))"
+        -jar "./$JAR_NAME" nogui
     )
 }
 
-# Start de server in tmux
-start_server() {
-    # Controleer of tmux beschikbaar is
-    if ! command -v tmux &>/dev/null; then
-        print_fout "tmux is niet geïnstalleerd!"
-        echo "Installeer eerst tmux met:"
-        echo "  sudo dnf install tmux"
-        exit 1
-    fi
-
-    if tmux has-session -t "$TMUX_SESSIE" 2>/dev/null; then
-        print_info "Er draait al een server in tmux sessie '$TMUX_SESSIE'"
-        read -rp "Wil je naar de bestaande sessie verbinden? (j/n) " antwoord
+# Fix permissions for server data directory
+fix_permissions() {
+    info "Fixing permissions for server data directory..."
+    
+    # Get current user
+    local current_user=$(whoami)
+    
+    # Change ownership of the entire server-data directory to current user
+    if [[ -d "$DATA_DIR" ]]; then
+        sudo chown -R "$current_user:$current_user" "$DATA_DIR" 2>/dev/null || {
+            # If sudo fails, try without it (might already be correct owner)
+            chown -R "$current_user:$current_user" "$DATA_DIR" 2>/dev/null || true
+        }
         
-        if [[ "$antwoord" =~ ^[Jj]$ ]]; then
-            tmux attach -t "$TMUX_SESSIE"
-            exit 0
-        else
-            print_info "Server blijft draaien in de achtergrond."
-            exit 0
-        fi
+        # Set proper permissions:
+        # - Directories: 755 (rwxr-xr-x)
+        # - Files: 644 (rw-r--r--)
+        # - JAR file: 755 (rwxr-xr-x) to ensure it's executable
+        find "$DATA_DIR" -type d -exec chmod 755 {} \; 2>/dev/null || true
+        find "$DATA_DIR" -type f -exec chmod 644 {} \; 2>/dev/null || true
+        [[ -f "$DATA_DIR/$JAR_NAME" ]] && chmod 755 "$DATA_DIR/$JAR_NAME" 2>/dev/null || true
+        
+        # Ensure logs directory exists and is writable
+        mkdir -p "$DATA_DIR/logs" 2>/dev/null || true
+        chmod 755 "$DATA_DIR/logs" 2>/dev/null || true
+        
+        # Remove any existing lock files that might cause issues
+        [[ -f "$DATA_DIR/world/session.lock" ]] && rm -f "$DATA_DIR/world/session.lock" 2>/dev/null || true
+        
+        success "Permissions fixed for server data directory"
+    else
+        info "Server data directory doesn't exist yet, permissions will be set after creation"
     fi
+}
+
+# Start server in tmux
+start_server() {
+    tmux has-session -t "$SESSION" 2>/dev/null && {
+        info "Server already running in session '$SESSION'"
+        read -rp "Connect to existing session? (y/n) " -n 1 -r
+        echo
+        [[ $REPLY =~ ^[Yy]$ ]] && exec tmux attach -t "$SESSION"
+        exit 0
+    }
     
-    print_info "Server starten in tmux sessie '$TMUX_SESSIE'..."
-    print_info "Working directory: $(pwd)/$DATA_DIR"
+    info "Starting server in tmux session '$SESSION'..."
+    info "Working directory: $(pwd)"
+    info "Java command: ${JAVA_CMD[*]}"
     
-    # Start tmux in de server directory
-    tmux new-session -d -s "$TMUX_SESSIE" -c "$DATA_DIR" "${JAVA_CMD[@]}"
+    # Configure tmux mouse support
+    grep -q "set -g mouse on" "$HOME/.tmux.conf" 2>/dev/null || 
+        echo "set -g mouse on" >> "$HOME/.tmux.conf"
     
+    # Create tmux session in the current directory (should be $DATA_DIR)
+    tmux new-session -d -s "$SESSION" -c "$(pwd)" "${JAVA_CMD[@]}"
     sleep 3
     
-    if tmux has-session -t "$TMUX_SESSIE" 2>/dev/null; then
-        print_succes "Server is gestart! 🎮"
-        echo ""
-        echo "----------------------------------------"
-        echo "  Verbind met: tmux attach -t $TMUX_SESSIE"
-        echo "  Loskoppelen: Ctrl+B gevolgd door D"
-        echo "  Status check: tmux ls"
-        echo "----------------------------------------"
-        echo ""
-        print_info "Server draait nu in de achtergrond."
-        print_info "Als de server direct stopt, controleer dan de logs met: tmux attach -t $TMUX_SESSIE"
+    if tmux has-session -t "$SESSION" 2>/dev/null; then
+        success "Server started!"
+        echo "Connect: tmux attach -t $SESSION"
+        echo "Detach: Ctrl+B then D"
+        echo "List sessions: tmux ls"
     else
-        print_fout "Kon de tmux sessie niet starten."
-        print_info "Probeer handmatig: cd $DATA_DIR && java -jar $JAR_NAAM nogui"
+        error "Failed to start tmux session"
+        info "Checking if tmux server is running..."
+        tmux list-sessions 2>/dev/null || echo "No tmux server running"
         exit 1
     fi
 }
 
-# --------------------- Main script -------------------------------
+# Main execution
+main() {
+    clear
+    echo "╔══════════════════════════════════════╗"
+    echo "║    Stichting Hemme MC Server 2025    ║"
+    echo "║       PaperMC 1.21.7 • 10GB RAM     ║"
+    echo "╚══════════════════════════════════════╝"
+    
+    setup_java
+    
+    mkdir -p "$DATA_DIR"
+    download_jar
+    
+    cd "$DATA_DIR"
+    
+    # Fix permissions before starting server
+    fix_permissions
+    
+    # Accept EULA
+    [[ ! -f "eula.txt" || ! $(grep -q "eula=true" "eula.txt" 2>/dev/null) ]] && {
+        info "Accepting EULA..."
+        echo "eula=true" > eula.txt
+    }
+    
+    # Build Java command in the correct directory
+    build_java_cmd
+    
+    info "Configuration:"
+    echo "  • RAM: $RAM"
+    echo "  • CPU cores: $(nproc)"
+    echo "  • Java: $(java -version 2>&1 | head -n1 | cut -d'"' -f2)"
+    echo "  • Data dir: $DATA_DIR"
+    echo
+    
+    fix_permissions
+    start_server
+}
 
-clear
-echo "╔════════════════════════════════════════════╗"
-echo "║   Stichting Hemme Minecraft Server 2025    ║"
-echo "║         Powered by PaperMC 1.21.7          ║"
-echo "╚════════════════════════════════════════════╝"
-echo ""
-
-# Controleer of Java geïnstalleerd is
-if ! command -v java &>/dev/null; then
-    print_fout "Java is niet geïnstalleerd!"
-    echo "Installeer eerst Java 21 of hoger met:"
-    echo "  sudo dnf install java-21-openjdk"
-    exit 1
-fi
-
-# Toon Java versie
-JAVA_VERSION=$(java -version 2>&1 | head -n 1 | cut -d'"' -f2)
-print_info "Java versie: $JAVA_VERSION"
-
-# Maak server directory
-mkdir -p "$DATA_DIR"
-
-# Download PaperMC (nu dat directory bestaat)
-download_paper
-
-# Ga naar server directory voor de rest van de operaties
-cd "$DATA_DIR"
-
-# Accepteer EULA automatisch (voor eerste keer)
-if [[ ! -f "eula.txt" ]] || ! grep -q "eula=true" "eula.txt" 2>/dev/null; then
-    print_info "EULA accepteren..."
-    echo "eula=true" > eula.txt
-    print_succes "EULA geaccepteerd!"
-fi
-
-# Configureer tmux
-configureer_tmux
-
-# Genereer Java commando
-genereer_java_cmd
-
-# Toon server informatie
-echo ""
-print_info "Server configuratie:"
-echo "  • RAM toewijzing: $RAM_TOEWIJZING"
-echo "  • CPU cores: 4"
-echo "  • Server type: PaperMC 1.21.7"
-echo "  • Data directory: $DATA_DIR"
-echo "  • JAR bestand: $JAR_NAAM"
-echo "  • EULA status: $(if [[ -f "eula.txt" ]] && grep -q "eula=true" "eula.txt"; then echo "✓ Geaccepteerd"; else echo "✗ Niet gevonden"; fi)"
-echo ""
-
-# Controleer of alle bestanden kloppen voordat we starten
-if [[ ! -f "$JAR_NAAM" ]]; then
-    print_fout "JAR bestand niet gevonden in $(pwd)/$JAR_NAAM"
-    exit 1
-fi
-
-if [[ ! -f "eula.txt" ]] || ! grep -q "eula=true" "eula.txt"; then
-    print_fout "EULA niet correct ingesteld in $(pwd)/eula.txt"
-    exit 1
-fi
-
-# Start de server
-start_server
+main "$@"
