@@ -16,8 +16,8 @@ dnf install wget tmux java-21-openjdk -y
 # --------------------- CONFIGURATIE ---------------------------------
 SERVER_NAAM="stichting-hemme-mc"
 DATA_DIR="./server-data"
-JAR_URL="https://fill-data.papermc.io/v1/objects/9adbd99ce7b42c9f0cb205686d83f0208a93fa6d215bb28196e12d0aaf49c2d8/paper-1.21.7-17.jar"
-JAR_HASH="9adbd99ce7b42c9f0cb205686d83f0208a93fa6d215bb28196e12d0aaf49c2d8"
+JAR_URL="https://fill-data.papermc.io/v1/objects/3c088d399dd3b83764653bee7c7c4f30b207fab7b97c4e4227bf96b853b2158a/paper-1.21.7-26.jar"
+JAR_HASH="3c088d399dd3b83764653bee7c7c4f30b207fab7b97c4e4227bf96b853b2158a"
 JAR_NAAM="hemme-mc.jar"
 RAM_TOEWIJZING="8G"
 TMUX_SESSIE="hemme-mc"
