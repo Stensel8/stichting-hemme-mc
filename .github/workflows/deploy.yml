@@ -172,17 +172,14 @@ jobs:
               echo "Wachten op server shutdown... (\$i/90)"
               sleep 1
             done
-            
-            # Force kill if still running after timeout
-            if tmux has-session -t hemme-mc 2>/dev/null; then
-              echo "Timeout bereikt, forceren van session kill..."
-              tmux kill-session -t hemme-mc
-              sleep 2
-            fi
-          else
-            echo "Geen actieve server sessie gevonden"
-            # Clean up any dead tmux sessions
-            tmux kill-session -t hemme-mc 2>/dev/null || true
+          fi
+          
+          # Always clean up any existing tmux sessions to prevent startup conflicts
+          echo "Opruimen van bestaande tmux sessies..."
+          if tmux has-session -t hemme-mc 2>/dev/null; then
+            echo "Verwijderen van bestaande tmux sessie 'hemme-mc'..."
+            tmux kill-session -t hemme-mc
+            sleep 2
           fi
           
           # Ensure we're in the right directory
@@ -193,7 +190,7 @@ jobs:
           
           # Start new server session with better error handling
           echo "Nieuwe server sessie starten..."
-          if ! tmux new-session -d -s hemme-mc 'cd /srv/minecraft && bash start.sh'; then
+          if ! tmux new-session -d -s hemme-mc 'cd /srv/minecraft && bash start.sh < /dev/null'; then
             echo "✗ Fout bij aanmaken van tmux sessie"
             exit 1
           fi

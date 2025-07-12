@@ -152,12 +152,12 @@ fix_permissions() {
 
 # Start server in tmux
 start_server() {
+    local force_restart="${1:-false}"
+    
     tmux has-session -t "$SESSION" 2>/dev/null && {
-        info "Server already running in session '$SESSION'"
-        read -rp "Connect to existing session? (y/n) " -n 1 -r
-        echo
-        [[ $REPLY =~ ^[Yy]$ ]] && exec tmux attach -t "$SESSION"
-        exit 0
+        info "Existing session '$SESSION' found, restarting server..."
+        tmux kill-session -t "$SESSION"
+        sleep 2
     }
     
     info "Starting server in tmux session '$SESSION'..."
