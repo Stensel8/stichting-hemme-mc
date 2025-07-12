@@ -1,8 +1,8 @@
 name: Deploy Minecraft Server
-
 on:
   push:
     branches: [ Gameserver ]
+  workflow_dispatch:
 
 jobs:
   deploy:
@@ -11,20 +11,21 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
-      - name: Kopieer naar server
-        uses: appleboy/scp-action@v0.1.2
+      - name: Start SSH agent
+        uses: webfactory/ssh-agent@v0.5.4
         with:
-          host: ${{ secrets.GAMESERVER_HOST }}
-          username: ${{ secrets.GAMESERVER_USER }}
-          key: ${{ secrets.GAMESERVER_SSH_KEY }}
-          source: "."
-          target: "/srv/minecraft"
+          ssh-private-key: ${{ secrets.GAMESERVER_SSH_KEY }}
+
+      - name: Accept host key
+        run: ssh-keyscan -H ${{ secrets.GAMESERVER_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Sync files via rsync
+        run: |
+          rsync -avz --delete \
+            -e ssh \
+            ./ ${{ secrets.GAMESERVER_USER }}@${{ secrets.GAMESERVER_HOST }}:/srv/minecraft
 
       - name: Herstart Minecraft
-        uses: appleboy/ssh-action@v0.1.5
-        with:
-          host: ${{ secrets.GAMESERVER_HOST }}
-          username: ${{ secrets.GAMESERVER_USER }}
-          key: ${{ secrets.GAMESERVER_SSH_KEY }}
-          script: |
+        run: |
+          ssh ${{ secrets.GAMESERVER_USER }}@${{ secrets.GAMESERVER_HOST }} \
             sudo systemctl restart minecraft
