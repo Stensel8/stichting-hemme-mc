@@ -24,7 +24,7 @@ TMUX_SESSIE="hemme-mc"
 
 # --------------------- FUNCTIES -------------------------------------
 
-# Print een gekleurd bericht
+# Print gekleurd bericht
 print_info() {
     echo -e "\033[1;34m[INFO]\033[0m $1"
 }
@@ -91,7 +91,7 @@ genereer_java_cmd() {
         -Xms"$RAM_TOEWIJZING"          # Start met toegewezen begin RAM
         -Xmx"$RAM_TOEWIJZING"          # Maximum RAM
         
-        # G1GC optimalisaties voor stabiele prestaties
+        # G1GC optimalisaties voor prestaties
         -XX:+UseG1GC
         -XX:+ParallelRefProcEnabled
         -XX:MaxGCPauseMillis=200
@@ -118,7 +118,7 @@ genereer_java_cmd() {
         --add-modules=jdk.incubator.vector
         
         # PaperMC specifiek
-        -Dpaper.maxChunkThreads=6      # Gebruik meer cores voor chunks
+        -Dpaper.maxChunkThreads=6 
         -jar "$JAR_NAAM"
         nogui
     )
@@ -126,6 +126,14 @@ genereer_java_cmd() {
 
 # Start de server in tmux
 start_server() {
+    # Controleer of tmux beschikbaar is
+    if ! command -v tmux &>/dev/null; then
+        print_fout "tmux is niet geïnstalleerd!"
+        echo "Installeer eerst tmux met:"
+        echo "  sudo dnf install tmux"
+        exit 1
+    fi
+
     if tmux has-session -t "$TMUX_SESSIE" 2>/dev/null; then
         print_info "Er draait al een server in tmux sessie '$TMUX_SESSIE'"
         read -rp "Wil je naar de bestaande sessie verbinden? (j/n) " antwoord
@@ -140,9 +148,12 @@ start_server() {
     fi
     
     print_info "Server starten in tmux sessie '$TMUX_SESSIE'..."
+    print_info "Working directory: $(pwd)/$DATA_DIR"
+    
+    # Start tmux in de server directory
     tmux new-session -d -s "$TMUX_SESSIE" -c "$DATA_DIR" "${JAVA_CMD[@]}"
     
-    sleep 2
+    sleep 3
     
     if tmux has-session -t "$TMUX_SESSIE" 2>/dev/null; then
         print_succes "Server is gestart! 🎮"
@@ -150,16 +161,19 @@ start_server() {
         echo "----------------------------------------"
         echo "  Verbind met: tmux attach -t $TMUX_SESSIE"
         echo "  Loskoppelen: Ctrl+B gevolgd door D"
+        echo "  Status check: tmux ls"
         echo "----------------------------------------"
         echo ""
         print_info "Server draait nu in de achtergrond."
+        print_info "Als de server direct stopt, controleer dan de logs met: tmux attach -t $TMUX_SESSIE"
     else
         print_fout "Kon de tmux sessie niet starten."
+        print_info "Probeer handmatig: cd $DATA_DIR && java -jar $JAR_NAAM nogui"
         exit 1
     fi
 }
 
-# --------------------- HOOFDPROGRAMMA -------------------------------
+# --------------------- Main script -------------------------------
 
 clear
 echo "╔════════════════════════════════════════════╗"
@@ -188,7 +202,7 @@ cd "$DATA_DIR"
 download_paper
 
 # Accepteer EULA automatisch (voor eerste keer)
-if [[ ! -f "eula.txt" ]]; then
+if [[ ! -f "eula.txt" ]] || ! grep -q "eula=true" "eula.txt" 2>/dev/null; then
     print_info "EULA accepteren..."
     echo "eula=true" > eula.txt
     print_succes "EULA geaccepteerd!"
@@ -207,7 +221,20 @@ echo "  • RAM toewijzing: $RAM_TOEWIJZING"
 echo "  • CPU cores: 4"
 echo "  • Server type: PaperMC 1.21.7"
 echo "  • Data directory: $DATA_DIR"
+echo "  • JAR bestand: $JAR_NAAM"
+echo "  • EULA status: $(if [[ -f "$DATA_DIR/eula.txt" ]] && grep -q "eula=true" "$DATA_DIR/eula.txt"; then echo "✓ Geaccepteerd"; else echo "✗ Niet gevonden"; fi)"
 echo ""
+
+# Controleer of alle bestanden kloppen voordat we starten
+if [[ ! -f "$DATA_DIR/$JAR_NAAM" ]]; then
+    print_fout "JAR bestand niet gevonden in $DATA_DIR/$JAR_NAAM"
+    exit 1
+fi
+
+if [[ ! -f "$DATA_DIR/eula.txt" ]] || ! grep -q "eula=true" "$DATA_DIR/eula.txt"; then
+    print_fout "EULA niet correct ingesteld in $DATA_DIR/eula.txt"
+    exit 1
+fi
 
 # Start de server
 start_server
