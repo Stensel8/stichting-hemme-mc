@@ -1,0 +1,270 @@
+# =====================================
+# connectiontest.yml – Pre-deployment validatie
+# =====================================
+name: Connection Test & Pre-deployment Validation
+on:
+  push:
+    branches: [ Gameserver ]
+  workflow_dispatch:
+
+jobs:
+  connection-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      HOST: ${{ secrets.GAMESERVER_HOST }}
+      USER: ${{ secrets.GAMESERVER_USER }}
+    outputs:
+      validation-passed: ${{ steps.validation-summary.outputs.passed }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start SSH-agent
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.GAMESERVER_SSH_KEY }}
+
+      - name: Voeg host-key toe
+        run: ssh-keyscan -t ed25519 -H "$HOST" >> ~/.ssh/known_hosts
+
+      - name: Test basis SSH connectiviteit
+        run: |
+          echo "=== SSH Connectivity Test ==="
+          ssh -o BatchMode=yes -o ConnectTimeout=10 "$USER@$HOST" \
+            'echo "✓ Verbonden met $(hostname -f) als $(whoami)" && echo "✓ Server uptime: $(uptime -p)"'
+
+      - name: Controleer server dependencies
+        id: dependency-check
+        run: |
+          ssh "$USER@$HOST" <<'EOS'
+          set -e
+          echo "=== Dependency Validation ==="
+          MISSING=0
+          
+          echo "Controleren van tmux..."
+          if ! command -v tmux >/dev/null; then
+            echo "✗ tmux ontbreekt. Installeer eerst handmatig (of run ./start.sh)."
+            MISSING=1
+          else
+            echo "✓ tmux is beschikbaar ($(tmux -V))"
+          fi
+          
+          echo "Controleren van Java..."
+          if ! java -version 2>&1 | grep -q "\(24\|17\)"; then
+            echo "✗ Java 17/24 ontbreekt. Installeer eerst handmatig (of run ./start.sh)."
+            MISSING=1
+          else
+            JAVA_VERSION=$(java -version 2>&1 | head -n1)
+            echo "✓ Java is beschikbaar: $JAVA_VERSION"
+          fi
+          
+          echo "Controleren van rsync..."
+          if ! command -v rsync >/dev/null; then
+            echo "✗ rsync ontbreekt (vereist voor file sync)."
+            MISSING=1
+          else
+            echo "✓ rsync is beschikbaar ($(rsync --version | head -n1))"
+          fi
+          
+          if [ "$MISSING" -eq 0 ]; then
+            echo "✓ Alle dependencies zijn beschikbaar"
+          else
+            echo "✗ Dependencies ontbreken, deployment kan niet doorgaan"
+          fi
+          
+          [ "$MISSING" -eq 0 ] || exit 1
+          EOS
+
+      - name: Controleer server directory structuur
+        run: |
+          ssh "$USER@$HOST" <<'EOS'
+          set -e
+          echo "=== Directory Structure Check ==="
+          
+          # Check if minecraft directory exists
+          if [ ! -d "/srv/minecraft" ]; then
+            echo "✗ /srv/minecraft directory ontbreekt"
+            echo "Aanmaken van /srv/minecraft directory..."
+            sudo mkdir -p /srv/minecraft
+            sudo chown $USER:$USER /srv/minecraft
+            echo "✓ /srv/minecraft directory aangemaakt"
+          else
+            echo "✓ /srv/minecraft directory bestaat"
+          fi
+          
+          # Check if server-data directory exists
+          if [ ! -d "/srv/minecraft/server-data" ]; then
+            echo "⚠ /srv/minecraft/server-data ontbreekt (wordt aangemaakt bij deployment)"
+            mkdir -p /srv/minecraft/server-data
+          else
+            echo "✓ /srv/minecraft/server-data directory bestaat"
+          fi
+          
+          # Check if backups directory exists
+          if [ ! -d "/srv/minecraft/backups" ]; then
+            echo "⚠ /srv/minecraft/backups ontbreekt (wordt aangemaakt bij deployment)"
+            mkdir -p /srv/minecraft/backups
+          else
+            echo "✓ /srv/minecraft/backups directory bestaat"
+          fi
+          
+          # Check permissions
+          if [ -w "/srv/minecraft" ]; then
+            echo "✓ Write permissions op /srv/minecraft"
+          else
+            echo "✗ Geen write permissions op /srv/minecraft"
+            exit 1
+          fi
+          EOS
+
+      - name: Test tmux functionaliteit
+        run: |
+          ssh "$USER@$HOST" <<'EOS'
+          set -e
+          echo "=== Tmux Functionality Test ==="
+          
+          # Create a test session
+          TEST_SESSION="hemme-test-$$"
+          echo "Aanmaken van test tmux sessie: $TEST_SESSION"
+          
+          # Start test session
+          tmux new-session -d -s "$TEST_SESSION" 'echo "Test session gestart"; sleep 2; echo "Test voltooid"'
+          
+          # Verify session exists
+          if tmux has-session -t "$TEST_SESSION" 2>/dev/null; then
+            echo "✓ Tmux sessie succesvol aangemaakt"
+          else
+            echo "✗ Tmux sessie aanmaken gefaald"
+            exit 1
+          fi
+          
+          # Wait a moment for command to complete
+          sleep 3
+          
+          # Capture output
+          OUTPUT=$(tmux capture-pane -t "$TEST_SESSION" -p)
+          echo "Tmux output test: $OUTPUT"
+          
+          # Clean up test session
+          tmux kill-session -t "$TEST_SESSION"
+          echo "✓ Test tmux sessie opgeruimd"
+          
+          # Check if existing minecraft session is running
+          if tmux has-session -t hemme-mc 2>/dev/null; then
+            echo "ℹ Bestaande minecraft server sessie 'hemme-mc' gevonden"
+            echo "   Status: $(tmux list-sessions | grep hemme-mc || echo 'Sessie details niet beschikbaar')"
+          else
+            echo "ℹ Geen bestaande minecraft server sessie gevonden"
+          fi
+          EOS
+
+      - name: Controleer repository bestanden
+        run: |
+          echo "=== Repository File Validation ==="
+          
+          # Check if server-data directory exists in repo
+          if [ ! -d "./server-data" ]; then
+            echo "✗ server-data/ directory ontbreekt in repository"
+            echo "   Zet je Minecraft server bestanden in de server-data/ map en commit opnieuw."
+            exit 1
+          else
+            echo "✓ server-data/ directory gevonden in repository"
+          fi
+          
+          # Check if start.sh exists
+          if [ ! -f "./start.sh" ]; then
+            echo "✗ start.sh script ontbreekt in repository"
+            exit 1
+          else
+            echo "✓ start.sh script gevonden"
+          fi
+          
+          # List important files in server-data
+          echo "Server bestanden in repository:"
+          find ./server-data -maxdepth 2 -type f | head -10 | while read file; do
+            echo "  - $file"
+          done
+
+      - name: Test disk ruimte
+        run: |
+          ssh "$USER@$HOST" <<'EOS'
+          set -e
+          echo "=== Disk Space Check ==="
+          
+          # Check available disk space
+          DISK_USAGE=$(df -h /srv/minecraft | tail -1)
+          echo "Disk usage voor /srv/minecraft:"
+          echo "$DISK_USAGE"
+          
+          # Extract percentage and check if < 90%
+          USAGE_PERCENT=$(echo "$DISK_USAGE" | awk '{print $5}' | sed 's/%//')
+          if [ "$USAGE_PERCENT" -gt 90 ]; then
+            echo "✗ Disk space kritiek laag: ${USAGE_PERCENT}% gebruikt"
+            echo "  Ruim eerst wat ruimte op voordat je deployment uitvoert"
+            exit 1
+          else
+            echo "✓ Voldoende disk space beschikbaar: ${USAGE_PERCENT}% gebruikt"
+          fi
+          
+          # Check if we have at least 1GB free for backup
+          AVAILABLE_GB=$(df -BG /srv/minecraft | tail -1 | awk '{print $4}' | sed 's/G//')
+          if [ "$AVAILABLE_GB" -lt 1 ]; then
+            echo "⚠ Minder dan 1GB beschikbaar, backup kan falen"
+          else
+            echo "✓ Voldoende ruimte voor backup (${AVAILABLE_GB}GB beschikbaar)"
+          fi
+          EOS
+
+      - name: Test network connectiviteit vanuit server
+        run: |
+          ssh "$USER@$HOST" <<'EOS'
+          echo "=== Network Connectivity Test ==="
+          
+          # Test if server can reach important minecraft resources
+          echo "Testen van externe connectiviteit..."
+          
+          # Test Minecraft authentication servers
+          if curl -s --connect-timeout 5 "https://sessionserver.mojang.com/session/minecraft/hasJoined?username=test&serverId=test" >/dev/null; then
+            echo "✓ Mojang authentication servers bereikbaar"
+          else
+            echo "⚠ Mojang authentication servers mogelijk niet bereikbaar"
+          fi
+          
+          # Test general internet connectivity
+          if ping -c 1 8.8.8.8 >/dev/null 2>&1; then
+            echo "✓ Internet connectiviteit beschikbaar"
+          else
+            echo "⚠ Internet connectiviteit mogelijk beperkt"
+          fi
+          EOS
+
+      - name: Validatie samenvatting
+        id: validation-summary
+        run: |
+          echo "=== Validatie Samenvatting ==="
+          echo "✓ SSH connectiviteit succesvol"
+          echo "✓ Alle dependencies beschikbaar"
+          echo "✓ Server directory structuur correct"
+          echo "✓ Tmux functionaliteit getest"
+          echo "✓ Repository bestanden gevalideerd"
+          echo "✓ Disk space voldoende"
+          echo "✓ Network connectiviteit getest"
+          echo ""
+          echo "🎉 Alle pre-deployment checks succesvol!"
+          echo "Server is klaar voor deployment."
+          echo ""
+          echo "passed=true" >> $GITHUB_OUTPUT
+
+  trigger-deployment:
+    needs: connection-test
+    if: needs.connection-test.outputs.validation-passed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger deployment workflow
+        run: |
+          echo "=== Triggering Deployment ==="
+          echo "Connection test succesvol, deployment wordt gestart..."
+          echo ""
+          echo "Deployment workflow wordt automatisch gestart door GitHub Actions."

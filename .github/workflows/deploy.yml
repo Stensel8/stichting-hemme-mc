@@ -3,13 +3,25 @@
 # =====================================
 name: Deploy Minecraft Server
 on:
-  push:
+  workflow_run:
+    workflows: ["Connection Test & Pre-deployment Validation"]
+    types:
+      - completed
     branches: [ Gameserver ]
   workflow_dispatch:
+    inputs:
+      skip_connection_test:
+        description: 'Skip connection test (alleen voor handmatige deployment)'
+        type: boolean
+        default: false
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    # Only run if connection test succeeded or if manually triggered with skip option
+    if: |
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.skip_connection_test == 'true')
     defaults:
       run:
         shell: bash
@@ -19,6 +31,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Deployment status check
+        run: |
+          echo "=== Deployment Initiated ==="
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            echo "✓ Deployment gestart na succesvolle connection test"
+            echo "Connection test workflow: ${{ github.event.workflow_run.name }}"
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "⚠ Handmatige deployment gestart (connection test overgeslagen)"
+          fi
+          echo ""
+
       - name: Start SSH‑agent
         uses: webfactory/ssh-agent@v0.9.0
         with:
@@ -27,35 +50,209 @@ jobs:
       - name: Voeg host‑key toe
         run: ssh-keyscan -t ed25519 -H "$HOST" >> ~/.ssh/known_hosts
 
-      - name: Controleer tmux en Java
+      - name: Controleer server dependencies
         run: |
           ssh "$USER@$HOST" <<'EOS'
           set -e
+          echo "=== Dependency Check ==="
           MISSING=0
+          
+          echo "Controleren van tmux..."
           if ! command -v tmux >/dev/null; then
-            echo "tmux ontbreekt. Installeer eerst handmatig (of run ./start.sh)."
+            echo "✗ tmux ontbreekt. Installeer eerst handmatig (of run ./start.sh)."
             MISSING=1
+          else
+            echo "✓ tmux is beschikbaar"
           fi
+          
+          echo "Controleren van Java..."
           if ! java -version 2>&1 | grep -q "\(24\|17\)"; then
-            echo "Java 17/24 ontbreekt. Installeer eerst handmatig (of run ./start.sh)."
+            echo "✗ Java 17/24 ontbreekt. Installeer eerst handmatig (of run ./start.sh)."
             MISSING=1
+          else
+            JAVA_VERSION=$(java -version 2>&1 | head -n1)
+            echo "✓ Java is beschikbaar: $JAVA_VERSION"
           fi
+          
+          if [ "$MISSING" -eq 0 ]; then
+            echo "✓ Alle dependencies zijn beschikbaar"
+          else
+            echo "✗ Dependencies ontbreken, deployment gestopt"
+          fi
+          
           [ "$MISSING" -eq 0 ] || exit 1
           EOS
 
-      - name: Bestanden kopiëren
+      - name: Backup huidige server data
+        run: |
+          ssh "$USER@$HOST" <<'EOS'
+          set -e
+          echo "=== Backup Creation ==="
+          
+          BACKUP_DIR="/srv/minecraft/backups"
+          TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+          BACKUP_PATH="$BACKUP_DIR/pre-deploy_$TIMESTAMP"
+          
+          # Create backup directory if it doesn't exist
+          mkdir -p "$BACKUP_DIR"
+          
+          # Create backup (exclude large temporary files)
+          echo "Maken van backup naar $BACKUP_PATH..."
+          rsync -av --exclude='logs/' --exclude='crash-reports/' --exclude='cache/' \
+                /srv/minecraft/server-data/ "$BACKUP_PATH/"
+          
+          # Keep only last 5 backups to save space
+          echo "Opruimen van oude backups..."
+          cd "$BACKUP_DIR"
+          ls -1t pre-deploy_* 2>/dev/null | tail -n +6 | xargs -r rm -rf
+          
+          echo "✓ Backup succesvol aangemaakt: $BACKUP_PATH"
+          EOS
+
+      - name: Bestanden synchroniseren
         run: |
           if [ ! -d ./server-data ]; then
             echo "Map server-data/ ontbreekt in repo. Zet je serverbestanden daarin en commit opnieuw."
             exit 1
           fi
-          rsync -avz --delete ./server-data/ "$USER@$HOST:/srv/minecraft/server-data/"
+          
+          echo "Synchroniseren van server bestanden..."
+          rsync -avz --delete --exclude='logs/' --exclude='crash-reports/' \
+                ./server-data/ "$USER@$HOST:/srv/minecraft/server-data/"
+          
+          echo "✓ Bestanden succesvol gesynchroniseerd"
 
-      - name: Herstart via tmux
+      - name: Waarschuw spelers en graceful server herstart
+        run: |
+          # Get commit info for player message
+          COMMIT_HASH=$(git rev-parse --short HEAD)
+          COMMIT_MSG=$(git log -1 --pretty=format:"%s" | head -c 50)
+          
+          ssh "$USER@$HOST" <<EOF
+          set -e
+          
+          # Check if tmux session exists
+          if tmux has-session -t hemme-mc 2>/dev/null; then
+            echo "Bestaande server gevonden, spelers waarschuwen..."
+            
+            # Send warning messages to all players with commit info
+            tmux send-keys -t hemme-mc 'say §c§l[SERVER] §6Server update wordt uitgerold!' Enter
+            tmux send-keys -t hemme-mc 'say §c§l[SERVER] §7Update: $COMMIT_MSG' Enter
+            tmux send-keys -t hemme-mc 'say §c§l[SERVER] §6Log binnen 30 seconden uit om problemen te voorkomen.' Enter
+            sleep 5
+            tmux send-keys -t hemme-mc 'say §c§l[SERVER] §6Server herstart over 25 seconden...' Enter
+            sleep 10
+            tmux send-keys -t hemme-mc 'say §c§l[SERVER] §6Server herstart over 15 seconden...' Enter
+            sleep 10
+            tmux send-keys -t hemme-mc 'say §c§l[SERVER] §e§lLaatste waarschuwing: server herstart over 5 seconden!' Enter
+            sleep 5
+            
+            echo "Graceful shutdown uitvoeren..."
+            # Send stop command to the server console
+            tmux send-keys -t hemme-mc 'stop' Enter
+            
+            # Wait for server to shut down (max 60 seconds)
+            for i in {1..60}; do
+              if ! tmux has-session -t hemme-mc 2>/dev/null; then
+                echo "Server succesvol gestopt na $i seconden"
+                break
+              fi
+              echo "Wachten op server shutdown... ($i/60)"
+              sleep 1
+            done
+            
+            # Force kill if still running after timeout
+            if tmux has-session -t hemme-mc 2>/dev/null; then
+              echo "Timeout bereikt, forceren van session kill..."
+              tmux kill-session -t hemme-mc
+            fi
+          else
+            echo "Geen bestaande server sessie gevonden"
+          fi
+          
+          # Start new server session
+          echo "Nieuwe server sessie starten..."
+          tmux new-session -d -s hemme-mc 'cd /srv/minecraft && bash start.sh'
+          
+          # Wait a moment and verify the session started
+          sleep 2
+          if tmux has-session -t hemme-mc 2>/dev/null; then
+            echo "✓ Server succesvol gestart in tmux sessie 'hemme-mc'"
+          else
+            echo "✗ Fout bij starten van server"
+            exit 1
+          fi
+          EOF
+
+      - name: Controleer server status
         run: |
           ssh "$USER@$HOST" <<'EOS'
-          set -e
-          tmux has-session -t mc 2>/dev/null && tmux kill-session -t mc || true
-          tmux new-session -d -s mc 'cd /srv/minecraft && bash start.sh'
-          echo "tmux‑sessie 'mc' opnieuw gestart"
+          echo "=== Server Status Check ==="
+          
+          if tmux has-session -t hemme-mc 2>/dev/null; then
+            echo "✓ Tmux sessie 'hemme-mc' is actief"
+            
+            # Check if Java process is running
+            if pgrep -f "java.*server" >/dev/null; then
+              echo "✓ Minecraft server proces is actief"
+            else
+              echo "⚠ Tmux sessie bestaat maar geen Java proces gevonden"
+            fi
+            
+            echo ""
+            echo "Om server logs te bekijken: tmux attach -t hemme-mc"
+            echo "Om server console te openen: tmux send-keys -t hemme-mc"
+          else
+            echo "✗ Tmux sessie 'hemme-mc' niet gevonden"
+            exit 1
+          fi
           EOS
+
+      - name: Verzend welkom bericht na herstart
+        run: |
+          ssh "$USER@$HOST" <<'EOS'
+          echo "=== Welkom Bericht ==="
+          
+          # Wait for server to fully start (check for "Done" message or similar)
+          echo "Wachten tot server volledig gestart is..."
+          for i in {1..30}; do
+            if tmux capture-pane -t hemme-mc -p | tail -10 | grep -q "Done\|Timings Reset"; then
+              echo "Server is volledig opgestart, welkom bericht verzenden..."
+              sleep 2
+              tmux send-keys -t hemme-mc 'say §a§l[SERVER] §6Server update voltooid! Welkom terug! 🎉' Enter
+              break
+            fi
+            echo "Wachten op server startup... ($i/30)"
+            sleep 2
+          done
+          
+          if [ $i -eq 30 ]; then
+            echo "⚠ Server opstart timeout, welkom bericht niet verzonden"
+          else
+            echo "✓ Welkom bericht verzonden naar spelers"
+          fi
+          EOS
+
+      - name: Deployment samenvatting
+        run: |
+          echo "=== Deployment Samenvatting ==="
+          echo "✓ Pre-deployment validatie succesvol"
+          echo "✓ Dependencies gecontroleerd"
+          echo "✓ Backup aangemaakt"
+          echo "✓ Bestanden gesynchroniseerd"
+          echo "✓ Server herstart met graceful shutdown"
+          echo "✓ Server status gecontroleerd"
+          echo ""
+          echo "Deployment succesvol voltooid! 🎉"
+          echo ""
+          echo "Server informatie:"
+          echo "- Tmux sessie: 'hemme-mc'"
+          echo "- Logs bekijken: ssh ${{ env.USER }}@${{ env.HOST }} -t 'tmux attach -t hemme-mc'"
+          echo "- Server console: ssh ${{ env.USER }}@${{ env.HOST }} -t 'tmux send-keys -t hemme-mc'"
+          echo ""
+          echo "Workflow details:"
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            echo "- Gestart na succesvolle connection test"
+          else
+            echo "- Handmatig gestart (connection test overgeslagen)"
+          fi
