@@ -6,14 +6,13 @@
 # =====================================================================
 # Stichting Hemme Minecraft Server
 # Stensel8, cdemmer04, Hintenhaus04, powercell86 & PrinsMayo
-# LoadBalancer-1 SPECS TO BE FILLED IN! NOT CONFIGURED YET!
-# GameServer-1   specs: i7-1360P   -> 4-core    | 8GB DDR5  | Fedora Server 42 (Hosted by Stensel8)
-# GameServer-2   specs: i7-12700H  -> 4-core    | 80GB DDR4  | Fedora Server 42 (Hosted by Hintenhaus04)
+
+# GameServer-1   specs: i7-1360P   -> 4-core    | 10GB DDR5  | Fedora Server 42 (Hosted by Stensel8)
 # =====================================================================
 
 param (
-    [string]$JarUrl = "https://fill-data.papermc.io/v1/objects/3c088d399dd3b83764653bee7c7c4f30b207fab7b97c4e4227bf96b853b2158a/paper-1.21.7-26.jar",
-    [string]$JarHash = "3c088d399dd3b83764653bee7c7c4f30b207fab7b97c4e4227bf96b853b2158a",
+    [string]$JarUrl = "https://fill-data.papermc.io/v1/objects/37b7ca967d81ba06ccb7986efc7f41b9faaaca1e06b351b8b3da102d35f9574e/paper-1.21.8-6.jar",
+    [string]$JarHash = "37b7ca967d81ba06ccb7986efc7f41b9faaaca1e06b351b8b3da102d35f9574e",
     [string]$JarName = "minecraft-server.jar",
     [string]$Ram = "8G",
     [string]$DataDir = ".\server-data"
