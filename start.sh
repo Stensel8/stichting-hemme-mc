@@ -13,8 +13,8 @@ set -euo pipefail
 # Config
 readonly JAVA_VERSION="21.0.1-tem"
 readonly DATA_DIR="./server-data"
-readonly JAR_URL="https://api.papermc.io/v2/projects/paper/versions/1.21.7/builds/26/downloads/paper-1.21.7-26.jar"
-readonly JAR_HASH="3c088d399dd3b83764653bee7c7c4f30b207fab7b97c4e4227bf96b853b2158a"
+readonly JAR_URL="https://fill-data.papermc.io/v1/objects/37b7ca967d81ba06ccb7986efc7f41b9faaaca1e06b351b8b3da102d35f9574e/paper-1.21.8-6.jar"
+readonly JAR_HASH="37b7ca967d81ba06ccb7986efc7f41b9faaaca1e06b351b8b3da102d35f9574e"
 readonly JAR_NAME="hemme-mc.jar"
 readonly RAM="10G"
 readonly SESSION="hemme-mc"
@@ -267,7 +267,7 @@ main() {
     clear
     echo "╔══════════════════════════════════════╗"
     echo "║    Stichting Hemme MC Server 2025    ║"
-    echo "║       PaperMC 1.21.7 • 10GB RAM      ║"
+    echo "║       PaperMC 1.21.8 • 10GB RAM      ║"
     echo "╚══════════════════════════════════════╝"
     
     # Ensure we're in the script's directory
