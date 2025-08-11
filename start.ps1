@@ -11,10 +11,10 @@
 # =====================================================================
 
 param (
-    [string]$JarUrl = "https://fill-data.papermc.io/v1/objects/37b7ca967d81ba06ccb7986efc7f41b9faaaca1e06b351b8b3da102d35f9574e/paper-1.21.8-6.jar",
-    [string]$JarHash = "37b7ca967d81ba06ccb7986efc7f41b9faaaca1e06b351b8b3da102d35f9574e",
+    [string]$JarUrl = "https://fill-data.papermc.io/v1/objects/9f18e2527bd1c06fc843e8cfacea228ab9cff86f0eaeee87bf1afe10c3f426ed/paper-1.21.8-28.jar",
+    [string]$JarHash = "9f18e2527bd1c06fc843e8cfacea228ab9cff86f0eaeee87bf1afe10c3f426ed",
     [string]$JarName = "minecraft-server.jar",
-    [string]$Ram = "8G",
+    [string]$Ram = "10G",
     [string]$DataDir = ".\server-data"
 )
 
